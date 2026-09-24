@@ -20,15 +20,15 @@ export function db(): NeonQueryFunction<false, false> {
   return client;
 }
 
-/** As contas que ja vao existir no primeiro acesso. */
-const SEED: Array<[string, number, string]> = [
-  ["Carro", 1326.74, "fixa"],
-  ["Vaga", 200, "fixa"],
-  ["Faculdade", 356, "fixa"],
-  ["Imposto", 180, "fixa"],
-  ["Contador", 250, "fixa"],
-  ["Cartao Nubank", 0, "cartao"],
-  ["Cartao Bradesco Empresa", 0, "cartao"],
+/** As contas que ja vao existir no primeiro acesso: nome, valor, tipo, secao. */
+const SEED: Array<[string, number, string, string]> = [
+  ["Carro", 1326.74, "fixa", "Transporte"],
+  ["Vaga", 200, "fixa", "Transporte"],
+  ["Faculdade", 356, "fixa", "Estudos"],
+  ["Imposto", 180, "fixa", "Empresa"],
+  ["Contador", 250, "fixa", "Empresa"],
+  ["Cartao Nubank", 0, "cartao", "Cartoes"],
+  ["Cartao Bradesco Empresa", 0, "cartao", "Cartoes"],
 ];
 
 let pronto: Promise<void> | null = null;
@@ -83,16 +83,31 @@ async function criar(): Promise<void> {
 
   await sql`create index if not exists gastos_data_idx on gastos (data)`;
 
+  // A coluna de secao veio depois. Quando ela ainda nao existe, criamos e
+  // distribuimos as contas antigas pelas secoes de origem uma unica vez.
+  const [{ tem }] = (await sql`
+    select count(*)::int as tem
+      from information_schema.columns
+     where table_name = 'contas' and column_name = 'secao'
+  `) as Array<{ tem: number }>;
+
+  if (tem === 0) {
+    await sql`alter table contas add column secao text not null default 'Geral'`;
+    for (const [nome, , , secao] of SEED) {
+      await sql`update contas set secao = ${secao} where nome = ${nome}`;
+    }
+  }
+
   const [{ total }] = (await sql`select count(*)::int as total from contas`) as Array<{
     total: number;
   }>;
 
   if (total === 0) {
     for (let i = 0; i < SEED.length; i++) {
-      const [nome, valor, tipo] = SEED[i];
+      const [nome, valor, tipo, secao] = SEED[i];
       await sql`
-        insert into contas (nome, valor, tipo, ordem)
-        values (${nome}, ${valor}, ${tipo}, ${i})
+        insert into contas (nome, valor, tipo, secao, ordem)
+        values (${nome}, ${valor}, ${tipo}, ${secao}, ${i})
         on conflict (nome) do nothing
       `;
     }

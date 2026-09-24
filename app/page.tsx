@@ -5,6 +5,7 @@ import {
   gastosDoMes,
   listarContas,
   porCategoria,
+  porSecao,
   CATEGORIAS,
   FORMAS_EXTRA,
   type LinhaMes,
@@ -23,6 +24,8 @@ import {
   novoGasto,
   excluirGasto,
   salvarConta,
+  novaConta,
+  removerConta,
   sairAction,
 } from "./actions";
 
@@ -32,6 +35,12 @@ const SELO: Record<LinhaMes["status"], string> = {
   pago: "Pago",
   atrasado: "Atrasado",
   aberto: "Em aberto",
+};
+
+const ERROS: Record<string, string> = {
+  gasto: "Para lançar um gasto preencha a descrição e um valor maior que zero.",
+  conta: "Para criar uma conta preencha pelo menos o nome.",
+  conta_existe: "Já existe uma conta com esse nome.",
 };
 
 export default async function Painel({
@@ -72,9 +81,16 @@ export default async function Painel({
   const totalGastos = gastos.reduce((s, g) => s + g.valor, 0);
   const emAberto = linhas.filter((l) => l.status !== "pago").length;
   const categorias = porCategoria(gastos);
+  const secoes = porSecao(linhas);
   const cartoes = contas.filter((c) => c.tipo === "cartao");
   const formas = [...cartoes.map((c) => c.nome), ...FORMAS_EXTRA];
+  const nomesSecoes = [...new Set(contas.map((c) => c.secao))];
   const ehMesAtual = ano === agora.ano && mes === agora.mes;
+  // Olhando outro mes, o gasto novo nasce no dia 1 dele, e nao em hoje:
+  // um lancamento datado de outro mes desapareceria da tela.
+  const dataPadrao = ehMesAtual
+    ? agora.iso
+    : `${ano}-${String(mes).padStart(2, "0")}-01`;
 
   return (
     <>
@@ -117,10 +133,8 @@ export default async function Painel({
           </div>
         ) : null}
 
-        {sp.erro === "gasto" ? (
-          <div className="erro">
-            Para lançar um gasto preencha a descrição e um valor maior que zero.
-          </div>
+        {sp.erro && ERROS[sp.erro] ? (
+          <div className="erro">{ERROS[sp.erro]}</div>
         ) : null}
 
         {!ehMesAtual ? (
@@ -159,83 +173,132 @@ export default async function Painel({
 
         <section>
           <h2>Contas do mês</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Conta</th>
-                <th className="esconde-mobile">Vencimento</th>
-                <th className="num">Previsto</th>
-                <th>Status</th>
-                <th className="num">Ação</th>
-              </tr>
-            </thead>
-            <tbody>
-              {linhas.map((l) => (
-                <tr key={l.conta_id}>
-                  <td>
-                    <strong>{l.nome}</strong>
-                    {l.tipo === "cartao" ? (
-                      <div style={{ fontSize: 12, color: "var(--cinza)" }}>
-                        soma dos gastos do mês
-                      </div>
-                    ) : null}
-                  </td>
-                  <td className="esconde-mobile">
-                    {l.vencimento ? dataBR(l.vencimento) : "—"}
-                  </td>
-                  <td className="num">{moeda(l.previsto)}</td>
-                  <td>
-                    <span className={`selo selo-${l.status}`}>
-                      {SELO[l.status]}
-                    </span>
-                    {l.pago && l.data_pgto ? (
-                      <div style={{ fontSize: 12, color: "var(--cinza)" }}>
-                        {moeda(l.pagoEfetivo)} em {dataBR(l.data_pgto)}
-                      </div>
-                    ) : null}
-                  </td>
-                  <td className="num">
-                    {l.pago ? (
-                      <form action={desfazerPagamento} className="pagar">
-                        <input type="hidden" name="ano" value={ano} />
-                        <input type="hidden" name="mes" value={mes} />
-                        <input
-                          type="hidden"
-                          name="conta_id"
-                          value={l.conta_id}
-                        />
-                        <button className="btn-leve" type="submit">
-                          Desfazer
-                        </button>
-                      </form>
-                    ) : (
-                      <form action={pagarConta} className="pagar">
-                        <input type="hidden" name="ano" value={ano} />
-                        <input type="hidden" name="mes" value={mes} />
-                        <input
-                          type="hidden"
-                          name="conta_id"
-                          value={l.conta_id}
-                        />
-                        <input
-                          name="valor_pago"
-                          inputMode="decimal"
-                          placeholder={l.previsto.toFixed(2).replace(".", ",")}
-                          aria-label={`Valor pago de ${l.nome}`}
-                        />
-                        <button className="btn" type="submit">
-                          Pagar
-                        </button>
-                      </form>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="vazio">
-            O campo ao lado de Pagar é opcional: vazio, vale o previsto.
-          </p>
+
+          {secoes.map(([secao, itens]) => {
+            const somaSecao = itens.reduce((s, l) => s + l.previsto, 0);
+            return (
+              <div className="secao" key={secao}>
+                <div className="secao-titulo">
+                  <span>{secao}</span>
+                  <span className="num">{moeda(somaSecao)}</span>
+                </div>
+                <table>
+                  <tbody>
+                    {itens.map((l) => (
+                      <tr key={l.conta_id}>
+                        <td>
+                          <strong>{l.nome}</strong>
+                          {l.tipo === "cartao" ? (
+                            <div className="sub">soma dos gastos do mês</div>
+                          ) : l.vencimento ? (
+                            <div className="sub">
+                              vence {dataBR(l.vencimento)}
+                            </div>
+                          ) : null}
+                        </td>
+                        <td className="num">{moeda(l.previsto)}</td>
+                        <td>
+                          <span className={`selo selo-${l.status}`}>
+                            {SELO[l.status]}
+                          </span>
+                          {l.pago && l.data_pgto ? (
+                            <div className="sub">
+                              {moeda(l.pagoEfetivo)} em {dataBR(l.data_pgto)}
+                            </div>
+                          ) : null}
+                        </td>
+                        <td className="num">
+                          {l.pago ? (
+                            <form action={desfazerPagamento} className="pagar">
+                              <input type="hidden" name="ano" value={ano} />
+                              <input type="hidden" name="mes" value={mes} />
+                              <input
+                                type="hidden"
+                                name="conta_id"
+                                value={l.conta_id}
+                              />
+                              <button className="btn-leve" type="submit">
+                                Desfazer
+                              </button>
+                            </form>
+                          ) : (
+                            <form action={pagarConta} className="pagar">
+                              <input type="hidden" name="ano" value={ano} />
+                              <input type="hidden" name="mes" value={mes} />
+                              <input
+                                type="hidden"
+                                name="conta_id"
+                                value={l.conta_id}
+                              />
+                              <input
+                                name="valor_pago"
+                                inputMode="decimal"
+                                placeholder={l.previsto
+                                  .toFixed(2)
+                                  .replace(".", ",")}
+                                aria-label={`Valor pago de ${l.nome}`}
+                              />
+                              <button className="btn" type="submit">
+                                Pagar
+                              </button>
+                            </form>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })}
+
+          {linhas.length === 0 ? (
+            <p className="vazio">Nenhuma conta cadastrada ainda.</p>
+          ) : null}
+
+          <details className="criar">
+            <summary>+ Adicionar conta</summary>
+            <form action={novaConta} className="linha-form">
+              <input type="hidden" name="ano" value={ano} />
+              <input type="hidden" name="mes" value={mes} />
+              <input name="nome" placeholder="nome da conta" required />
+              <input
+                name="secao"
+                placeholder="seção (ex.: Comida)"
+                list="secoes"
+                aria-label="Seção"
+              />
+              <datalist id="secoes">
+                {nomesSecoes.map((s) => (
+                  <option key={s} value={s} />
+                ))}
+              </datalist>
+              <select name="tipo" defaultValue="fixa" aria-label="Tipo">
+                <option value="fixa">Valor fixo</option>
+                <option value="cartao">Cartão (soma dos gastos)</option>
+              </select>
+              <input
+                name="valor"
+                inputMode="decimal"
+                placeholder="valor mensal"
+                aria-label="Valor mensal"
+              />
+              <input
+                name="dia_vencimento"
+                inputMode="numeric"
+                placeholder="dia venc."
+                aria-label="Dia do vencimento"
+              />
+              <button className="btn" type="submit">
+                Criar
+              </button>
+            </form>
+            <p className="vazio">
+              Escolhendo Cartão, a conta não tem valor próprio: ela soma os
+              gastos que você marcar como pagos com ela, e o nome aparece na
+              lista de Pago com.
+            </p>
+          </details>
         </section>
 
         <section>
@@ -246,7 +309,7 @@ export default async function Painel({
             <input
               type="date"
               name="data"
-              defaultValue={agora.iso}
+              defaultValue={dataPadrao}
               aria-label="Data"
             />
             <input
@@ -347,25 +410,27 @@ export default async function Painel({
           <details>
             <summary>Ajustes das contas</summary>
             <table>
-              <thead>
-                <tr>
-                  <th>Conta</th>
-                  <th className="num">Valor mensal</th>
-                  <th className="num">Dia do vencimento</th>
-                  <th />
-                </tr>
-              </thead>
               <tbody>
                 {contas.map((c) => (
                   <tr key={c.id}>
                     <td>
                       <strong>{c.nome}</strong>
+                      <div className="sub">
+                        {c.tipo === "cartao" ? "cartão" : "valor fixo"}
+                      </div>
                     </td>
-                    <td colSpan={3}>
+                    <td>
                       <form action={salvarConta} className="pagar">
                         <input type="hidden" name="ano" value={ano} />
                         <input type="hidden" name="mes" value={mes} />
                         <input type="hidden" name="id" value={c.id} />
+                        <input
+                          name="secao"
+                          defaultValue={c.secao}
+                          list="secoes"
+                          aria-label={`Seção de ${c.nome}`}
+                          style={{ width: 130 }}
+                        />
                         <input
                           name="valor"
                           inputMode="decimal"
@@ -393,14 +458,28 @@ export default async function Painel({
                         </button>
                       </form>
                     </td>
+                    <td className="num">
+                      <form action={removerConta}>
+                        <input type="hidden" name="ano" value={ano} />
+                        <input type="hidden" name="mes" value={mes} />
+                        <input type="hidden" name="id" value={c.id} />
+                        <button
+                          className="btn-leve"
+                          type="submit"
+                          aria-label={`Remover ${c.nome}`}
+                        >
+                          Remover
+                        </button>
+                      </form>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
             <p className="vazio">
               O valor novo vale deste mês em diante, e só nas contas que ainda
-              não foram marcadas como pagas. O dia do vencimento é o que faz uma
-              conta aparecer como atrasada.
+              não foram marcadas como pagas. Remover tira a conta dos próximos
+              meses e mantém o que já foi pago.
             </p>
           </details>
         </section>

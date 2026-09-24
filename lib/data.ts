@@ -7,6 +7,7 @@ export type Conta = {
   valor: number;
   dia_vencimento: number | null;
   tipo: "fixa" | "cartao";
+  secao: string;
   ordem: number;
 };
 
@@ -16,6 +17,7 @@ export type LinhaMes = {
   conta_id: number;
   nome: string;
   tipo: "fixa" | "cartao";
+  secao: string;
   dia_vencimento: number | null;
   vencimento: string | null;
   previsto: number;
@@ -92,10 +94,10 @@ export async function listarContas(): Promise<Conta[]> {
   await ensureSchema();
   const sql = db();
   const linhas = (await sql`
-    select id, nome, valor, dia_vencimento, tipo, ordem
+    select id, nome, valor, dia_vencimento, tipo, secao, ordem
       from contas
      where ativo
-     order by ordem, id
+     order by secao, ordem, id
   `) as Array<Record<string, unknown>>;
   return linhas.map((l) => ({
     id: num(l.id),
@@ -103,6 +105,7 @@ export async function listarContas(): Promise<Conta[]> {
     valor: num(l.valor),
     dia_vencimento: l.dia_vencimento == null ? null : num(l.dia_vencimento),
     tipo: l.tipo === "cartao" ? "cartao" : "fixa",
+    secao: String(l.secao ?? "Geral"),
     ordem: num(l.ordem),
   }));
 }
@@ -133,12 +136,12 @@ export async function contasDoMes(ano: number, mes: number): Promise<LinhaMes[]>
   const [linhas, faturas] = await Promise.all([
     sql`
       select c.id   as conta_id,
-             c.nome, c.tipo, c.dia_vencimento,
+             c.nome, c.tipo, c.secao, c.dia_vencimento,
              m.previsto, m.pago, m.valor_pago, m.data_pgto
         from contas_mes m
         join contas c on c.id = m.conta_id
        where m.ano = ${ano} and m.mes = ${mes} and c.ativo
-       order by c.ordem, c.id
+       order by c.secao, c.ordem, c.id
     ` as Promise<Array<Record<string, unknown>>>,
     faturasDoMes(ano, mes),
   ]);
@@ -168,6 +171,7 @@ export async function contasDoMes(ano: number, mes: number): Promise<LinhaMes[]>
       conta_id: num(l.conta_id),
       nome,
       tipo,
+      secao: String(l.secao ?? "Geral"),
       dia_vencimento: dia,
       vencimento,
       previsto,
@@ -198,6 +202,17 @@ export async function gastosDoMes(ano: number, mes: number): Promise<Gasto[]> {
     pago_com: String(l.pago_com),
     valor: num(l.valor),
   }));
+}
+
+/** Agrupa as contas do mes por secao, preservando a ordem que veio do banco. */
+export function porSecao(linhas: LinhaMes[]): Array<[string, LinhaMes[]]> {
+  const mapa = new Map<string, LinhaMes[]>();
+  for (const l of linhas) {
+    const atual = mapa.get(l.secao);
+    if (atual) atual.push(l);
+    else mapa.set(l.secao, [l]);
+  }
+  return [...mapa.entries()];
 }
 
 export function porCategoria(gastos: Gasto[]): Array<[string, number]> {

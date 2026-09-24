@@ -361,3 +361,66 @@ details[open] summary {
     font-size: 14px;
   }
 }
+
+.secao {
+  margin-bottom: 18px;
+}
+
+.secao-titulo {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+  background: var(--claro);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--navy);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.secao-titulo .num {
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--cinza);
+}
+
+.sub {
+  font-size: 12px;
+  color: var(--cinza);
+}
+
+.criar {
+  border-top: 1px solid var(--linha);
+  padding-top: 14px;
+  margin-top: 4px;
+}
+
+.criar summary {
+  display: inline-block;
+  background: none;
+  border: 1px solid var(--border, var(--linha));
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 14px;
+  color: var(--navy);
+}
+
+.criar summary:hover {
+  border-color: var(--azul);
+  color: var(--azul);
+}
+
+.criar .linha-form {
+  grid-template-columns: 1.4fr 1fr 1.2fr 1fr 90px auto;
+  margin-top: 14px;
+}
+
+@media (max-width: 760px) {
+  .criar .linha-form {
+    grid-template-columns: 1fr;
+  }
+}

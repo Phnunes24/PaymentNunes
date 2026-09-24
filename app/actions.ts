@@ -91,7 +91,13 @@ export async function novoGasto(fd: FormData): Promise<void> {
   `;
 
   revalidatePath("/");
-  redirect(destino(fd));
+
+  // O gasto pertence ao mes da data dele. Se esse nao for o mes na tela, e
+  // para la que voltamos: senao o lancamento some e parece que nao funcionou.
+  const [a, m] = data.split("-").map(Number);
+  redirect(
+    Number.isFinite(a) && Number.isFinite(m) ? `/?ano=${a}&mes=${m}` : destino(fd)
+  );
 }
 
 export async function excluirGasto(fd: FormData): Promise<void> {
@@ -120,11 +126,12 @@ export async function salvarConta(fd: FormData): Promise<void> {
   const diaBruto = String(fd.get("dia_vencimento") ?? "").trim();
   const dia = diaBruto === "" ? null : parseInteiro(diaBruto);
   const diaValido = dia != null && dia >= 1 && dia <= 31 ? dia : null;
+  const secao = String(fd.get("secao") ?? "").trim() || "Geral";
 
   const sql = db();
   await sql`
     update contas
-       set valor = ${valor}, dia_vencimento = ${diaValido}
+       set valor = ${valor}, dia_vencimento = ${diaValido}, secao = ${secao}
      where id = ${id}
   `;
 
@@ -138,6 +145,59 @@ export async function salvarConta(fd: FormData): Promise<void> {
        and c.tipo = 'fixa'
        and m.pago = false
        and (m.ano > ${ano} or (m.ano = ${ano} and m.mes >= ${mes}))
+  `;
+
+  revalidatePath("/");
+  redirect(destino(fd));
+}
+
+/** Cria uma conta nova. Ela aparece no mes que voce estiver vendo e nos
+ *  proximos, porque cada mes se monta com as contas ativas do momento. */
+export async function novaConta(fd: FormData): Promise<void> {
+  await exigirLogin();
+  await ensureSchema();
+
+  const nome = String(fd.get("nome") ?? "").trim();
+  if (nome === "") redirect(destino(fd, "erro=conta"));
+
+  const secao = String(fd.get("secao") ?? "").trim() || "Geral";
+  const tipo = String(fd.get("tipo") ?? "fixa") === "cartao" ? "cartao" : "fixa";
+  const valor = tipo === "cartao" ? 0 : parseValor(fd.get("valor"));
+  const diaBruto = String(fd.get("dia_vencimento") ?? "").trim();
+  const dia = diaBruto === "" ? null : parseInteiro(diaBruto);
+  const diaValido = dia != null && dia >= 1 && dia <= 31 ? dia : null;
+
+  const sql = db();
+  const [{ proxima }] = (await sql`
+    select coalesce(max(ordem), 0) + 1 as proxima from contas
+  `) as Array<{ proxima: number }>;
+
+  const criada = (await sql`
+    insert into contas (nome, valor, dia_vencimento, tipo, secao, ordem)
+    values (${nome}, ${valor}, ${diaValido}, ${tipo}, ${secao}, ${proxima})
+    on conflict (nome) do update set ativo = true
+    returning id
+  `) as Array<{ id: number }>;
+
+  if (criada.length === 0) redirect(destino(fd, "erro=conta_existe"));
+
+  revalidatePath("/");
+  redirect(destino(fd));
+}
+
+/** Tira a conta de circulacao sem apagar o historico ja pago. */
+export async function removerConta(fd: FormData): Promise<void> {
+  await exigirLogin();
+  await ensureSchema();
+
+  const id = parseInteiro(fd.get("id"));
+  if (id == null) return;
+
+  const sql = db();
+  await sql`update contas set ativo = false where id = ${id}`;
+  await sql`
+    delete from contas_mes
+     where conta_id = ${id} and pago = false
   `;
 
   revalidatePath("/");
