@@ -24,10 +24,13 @@ import {
   novoGasto,
   excluirGasto,
   salvarConta,
+  salvarPrevisto,
+  salvarGasto,
   novaConta,
   removerConta,
   sairAction,
 } from "./actions";
+import MesDoDispositivo from "./mes-do-dispositivo";
 
 export const dynamic = "force-dynamic";
 
@@ -52,6 +55,7 @@ export default async function Painel({
 
   const sp = await searchParams;
   const agora = hoje();
+  const mesExplicito = Boolean(sp.ano && sp.mes);
   const ano = parseInteiro(sp.ano ?? null, agora.ano) ?? agora.ano;
   const mesBruto = parseInteiro(sp.mes ?? null, agora.mes) ?? agora.mes;
   const mes = mesBruto >= 1 && mesBruto <= 12 ? mesBruto : agora.mes;
@@ -121,6 +125,8 @@ export default async function Painel({
       </header>
 
       <main className="pagina">
+        <MesDoDispositivo ano={ano} mes={mes} explicito={mesExplicito} />
+
         {falhaBanco ? (
           <div className="aviso">
             <strong>Banco de dados ainda não conectado.</strong>
@@ -196,7 +202,35 @@ export default async function Painel({
                             </div>
                           ) : null}
                         </td>
-                        <td className="num">{moeda(l.previsto)}</td>
+                        <td className="num">
+                          <form action={salvarPrevisto} className="valor">
+                            <input type="hidden" name="ano" value={ano} />
+                            <input type="hidden" name="mes" value={mes} />
+                            <input
+                              type="hidden"
+                              name="conta_id"
+                              value={l.conta_id}
+                            />
+                            <input
+                              name="previsto"
+                              inputMode="decimal"
+                              defaultValue={l.previsto
+                                .toFixed(2)
+                                .replace(".", ",")}
+                              aria-label={`Valor previsto de ${l.nome}`}
+                            />
+                            <button
+                              className="btn-leve"
+                              type="submit"
+                              aria-label={`Salvar valor de ${l.nome}`}
+                            >
+                              ✓
+                            </button>
+                          </form>
+                          {l.tipo === "cartao" && l.previstoManual ? (
+                            <div className="sub">valor digitado</div>
+                          ) : null}
+                        </td>
                         <td>
                           <span className={`selo selo-${l.status}`}>
                             {SELO[l.status]}
@@ -255,6 +289,12 @@ export default async function Painel({
           {linhas.length === 0 ? (
             <p className="vazio">Nenhuma conta cadastrada ainda.</p>
           ) : null}
+
+          <p className="vazio">
+            Todo valor da tela é editável: digite por cima e confirme no ✓.
+            Deixando o campo vazio, o valor volta ao automático — o do cadastro,
+            nas contas fixas, e a soma dos gastos, nos cartões.
+          </p>
 
           <details className="criar">
             <summary>+ Adicionar conta</summary>
@@ -362,7 +402,26 @@ export default async function Painel({
                   <td>{g.descricao}</td>
                   <td className="esconde-mobile">{g.categoria}</td>
                   <td className="esconde-mobile">{g.pago_com}</td>
-                  <td className="num">{moeda(g.valor)}</td>
+                  <td className="num">
+                    <form action={salvarGasto} className="valor">
+                      <input type="hidden" name="ano" value={ano} />
+                      <input type="hidden" name="mes" value={mes} />
+                      <input type="hidden" name="id" value={g.id} />
+                      <input
+                        name="valor"
+                        inputMode="decimal"
+                        defaultValue={g.valor.toFixed(2).replace(".", ",")}
+                        aria-label={`Valor de ${g.descricao}`}
+                      />
+                      <button
+                        className="btn-leve"
+                        type="submit"
+                        aria-label={`Salvar valor de ${g.descricao}`}
+                      >
+                        ✓
+                      </button>
+                    </form>
+                  </td>
                   <td className="num">
                     <form action={excluirGasto}>
                       <input type="hidden" name="ano" value={ano} />

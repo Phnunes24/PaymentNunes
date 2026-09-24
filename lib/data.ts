@@ -21,6 +21,7 @@ export type LinhaMes = {
   dia_vencimento: number | null;
   vencimento: string | null;
   previsto: number;
+  previstoManual: boolean;
   pago: boolean;
   valor_pago: number | null;
   data_pgto: string | null;
@@ -137,7 +138,7 @@ export async function contasDoMes(ano: number, mes: number): Promise<LinhaMes[]>
     sql`
       select c.id   as conta_id,
              c.nome, c.tipo, c.secao, c.dia_vencimento,
-             m.previsto, m.pago, m.valor_pago, m.data_pgto
+             m.previsto, m.previsto_manual, m.pago, m.valor_pago, m.data_pgto
         from contas_mes m
         join contas c on c.id = m.conta_id
        where m.ano = ${ano} and m.mes = ${mes} and c.ativo
@@ -151,8 +152,11 @@ export async function contasDoMes(ano: number, mes: number): Promise<LinhaMes[]>
   return linhas.map((l) => {
     const tipo = l.tipo === "cartao" ? "cartao" : "fixa";
     const nome = String(l.nome);
+    const manual = Boolean(l.previsto_manual);
+    // Cartao sem valor digitado e a soma dos gastos do mes. Assim que voce
+    // escreve um valor, passa a valer o que voce escreveu.
     const previsto =
-      tipo === "cartao" ? (faturas.get(nome) ?? 0) : num(l.previsto);
+      tipo === "cartao" && !manual ? (faturas.get(nome) ?? 0) : num(l.previsto);
     const pago = Boolean(l.pago);
     const valorPago = l.valor_pago == null ? null : num(l.valor_pago);
     const dia = l.dia_vencimento == null ? null : num(l.dia_vencimento);
@@ -175,6 +179,7 @@ export async function contasDoMes(ano: number, mes: number): Promise<LinhaMes[]>
       dia_vencimento: dia,
       vencimento,
       previsto,
+      previstoManual: manual,
       pago,
       valor_pago: valorPago,
       data_pgto: iso(l.data_pgto),

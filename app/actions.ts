@@ -203,3 +203,57 @@ export async function removerConta(fd: FormData): Promise<void> {
   revalidatePath("/");
   redirect(destino(fd));
 }
+
+/** Muda o previsto de UMA conta em UM mes. Campo vazio devolve o valor
+ *  automatico: o do cadastro, para conta fixa, e a soma dos gastos, para
+ *  cartao. */
+export async function salvarPrevisto(fd: FormData): Promise<void> {
+  await exigirLogin();
+  await ensureSchema();
+
+  const ano = parseInteiro(fd.get("ano"));
+  const mes = parseInteiro(fd.get("mes"));
+  const contaId = parseInteiro(fd.get("conta_id"));
+  if (ano == null || mes == null || contaId == null) return;
+
+  const bruto = String(fd.get("previsto") ?? "").trim();
+  const sql = db();
+
+  if (bruto === "") {
+    await sql`
+      update contas_mes m
+         set previsto_manual = false,
+             previsto = case when c.tipo = 'cartao' then 0 else c.valor end
+        from contas c
+       where c.id = m.conta_id
+         and m.conta_id = ${contaId}
+         and m.ano = ${ano} and m.mes = ${mes}
+    `;
+  } else {
+    await sql`
+      update contas_mes
+         set previsto = ${parseValor(bruto)}, previsto_manual = true
+       where conta_id = ${contaId} and ano = ${ano} and mes = ${mes}
+    `;
+  }
+
+  revalidatePath("/");
+  redirect(destino(fd));
+}
+
+/** Corrige o valor de um gasto ja lancado. */
+export async function salvarGasto(fd: FormData): Promise<void> {
+  await exigirLogin();
+  await ensureSchema();
+
+  const id = parseInteiro(fd.get("id"));
+  if (id == null) return;
+
+  const valor = parseValor(fd.get("valor"));
+  if (valor <= 0) redirect(destino(fd, "erro=gasto"));
+
+  await db()`update gastos set valor = ${valor} where id = ${id}`;
+
+  revalidatePath("/");
+  redirect(destino(fd));
+}

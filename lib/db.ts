@@ -98,6 +98,22 @@ async function criar(): Promise<void> {
     }
   }
 
+  // Marca que o previsto daquele mes foi digitado a mao. Para um cartao, e o
+  // que faz o valor parar de ser a soma dos gastos e passar a ser o que voce
+  // escreveu.
+  const [{ tem: temManual }] = (await sql`
+    select count(*)::int as tem
+      from information_schema.columns
+     where table_name = 'contas_mes' and column_name = 'previsto_manual'
+  `) as Array<{ tem: number }>;
+
+  if (temManual === 0) {
+    await sql`
+      alter table contas_mes
+        add column previsto_manual boolean not null default false
+    `;
+  }
+
   const [{ total }] = (await sql`select count(*)::int as total from contas`) as Array<{
     total: number;
   }>;

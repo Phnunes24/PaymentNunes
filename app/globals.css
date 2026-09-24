@@ -424,3 +424,22 @@ details[open] summary {
     grid-template-columns: 1fr;
   }
 }
+
+.valor {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.valor input {
+  width: 92px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  padding: 6px 8px;
+}
+
+.valor .btn-leve {
+  padding: 5px 8px;
+  line-height: 1;
+}
