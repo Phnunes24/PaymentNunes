@@ -1,4 +1,5 @@
 import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
+import { hoje } from "./format";
 
 let client: NeonQueryFunction<false, false> | null = null;
 
@@ -30,6 +31,10 @@ const SEED: Array<[string, number, string, string]> = [
   ["Cartao Nubank", 0, "cartao", "Cartoes"],
   ["Cartao Bradesco Empresa", 0, "cartao", "Cartoes"],
 ];
+
+/** Renda que ja vai estar preenchida no primeiro acesso. Depois disso ela se
+ *  muda pela propria pagina, mes a mes. */
+const RENDA_INICIAL = 4300;
 
 let pronto: Promise<void> | null = null;
 
@@ -83,6 +88,18 @@ async function criar(): Promise<void> {
 
   await sql`create index if not exists gastos_data_idx on gastos (data)`;
 
+  // Quanto entra no mes. Uma linha por mes, e o mes sem linha propria herda a
+  // ultima renda cadastrada antes dele.
+  await sql`
+    create table if not exists renda (
+      id serial primary key,
+      ano int not null,
+      mes int not null,
+      valor numeric(12, 2) not null default 0,
+      unique (ano, mes)
+    )
+  `;
+
   // A coluna de secao veio depois. Quando ela ainda nao existe, criamos e
   // distribuimos as contas antigas pelas secoes de origem uma unica vez.
   const [{ tem }] = (await sql`
@@ -111,6 +128,19 @@ async function criar(): Promise<void> {
     await sql`
       alter table contas_mes
         add column previsto_manual boolean not null default false
+    `;
+  }
+
+  const [{ total: temRenda }] = (await sql`
+    select count(*)::int as total from renda
+  `) as Array<{ total: number }>;
+
+  if (temRenda === 0) {
+    const { ano, mes } = hoje();
+    await sql`
+      insert into renda (ano, mes, valor)
+      values (${ano}, ${mes}, ${RENDA_INICIAL})
+      on conflict (ano, mes) do nothing
     `;
   }
 

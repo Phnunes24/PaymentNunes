@@ -189,6 +189,30 @@ export async function contasDoMes(ano: number, mes: number): Promise<LinhaMes[]>
   });
 }
 
+/** Renda daquele mes. O mes que nunca teve valor digitado herda a ultima
+ *  renda cadastrada antes dele, do mesmo jeito que o valor de uma conta fixa
+ *  vale dali para a frente. Para um mes anterior a tudo que existe, vale a
+ *  primeira renda cadastrada, senao o mes passado apareceria zerado. */
+export async function rendaDoMes(ano: number, mes: number): Promise<number> {
+  await ensureSchema();
+  const sql = db();
+  const alvo = ano * 12 + mes;
+
+  const anteriores = (await sql`
+    select valor
+      from renda
+     where ano * 12 + mes <= ${alvo}
+     order by ano desc, mes desc
+     limit 1
+  `) as Array<Record<string, unknown>>;
+  if (anteriores.length > 0) return num(anteriores[0].valor);
+
+  const primeira = (await sql`
+    select valor from renda order by ano, mes limit 1
+  `) as Array<Record<string, unknown>>;
+  return primeira.length > 0 ? num(primeira[0].valor) : 0;
+}
+
 export async function gastosDoMes(ano: number, mes: number): Promise<Gasto[]> {
   await ensureSchema();
   const sql = db();

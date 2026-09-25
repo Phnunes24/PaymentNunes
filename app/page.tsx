@@ -6,6 +6,7 @@ import {
   listarContas,
   porCategoria,
   porSecao,
+  rendaDoMes,
   CATEGORIAS,
   FORMAS_EXTRA,
   type LinhaMes,
@@ -26,6 +27,7 @@ import {
   salvarConta,
   salvarPrevisto,
   salvarGasto,
+  salvarRenda,
   novaConta,
   removerConta,
   sairAction,
@@ -66,13 +68,15 @@ export default async function Painel({
   let linhas: LinhaMes[] = [];
   let gastos: Awaited<ReturnType<typeof gastosDoMes>> = [];
   let contas: Awaited<ReturnType<typeof listarContas>> = [];
+  let renda = 0;
   let falhaBanco: string | null = null;
 
   try {
-    [linhas, gastos, contas] = await Promise.all([
+    [linhas, gastos, contas, renda] = await Promise.all([
       contasDoMes(ano, mes),
       gastosDoMes(ano, mes),
       listarContas(),
+      rendaDoMes(ano, mes),
     ]);
   } catch (e) {
     falhaBanco = e instanceof Error ? e.message : String(e);
@@ -88,6 +92,13 @@ export default async function Painel({
   const secoes = porSecao(linhas);
   const cartoes = contas.filter((c) => c.tipo === "cartao");
   const formas = [...cartoes.map((c) => c.nome), ...FORMAS_EXTRA];
+  // Gasto no cartao ja esta dentro do previsto, virou fatura. So o que saiu
+  // por fora entra de novo na conta da sobra, senao contaria duas vezes.
+  const nomesCartoes = new Set(cartoes.map((c) => c.nome));
+  const gastosAvulsos = gastos
+    .filter((g) => !nomesCartoes.has(g.pago_com))
+    .reduce((s, g) => s + g.valor, 0);
+  const sobra = renda - previsto - gastosAvulsos;
   const nomesSecoes = [...new Set(contas.map((c) => c.secao))];
   const ehMesAtual = ano === agora.ano && mes === agora.mes;
   // Olhando outro mes, o gasto novo nasce no dia 1 dele, e nao em hoje:
@@ -152,6 +163,26 @@ export default async function Painel({
 
         <div className="cartoes">
           <div className="cartao">
+            <span>Renda do mês</span>
+            <form action={salvarRenda} className="valor valor-cartao">
+              <input type="hidden" name="ano" value={ano} />
+              <input type="hidden" name="mes" value={mes} />
+              <input
+                name="renda"
+                inputMode="decimal"
+                defaultValue={renda.toFixed(2).replace(".", ",")}
+                aria-label={`Renda de ${rotuloMes(ano, mes)}`}
+              />
+              <button
+                className="btn-leve"
+                type="submit"
+                aria-label="Salvar renda do mês"
+              >
+                ✓
+              </button>
+            </form>
+          </div>
+          <div className="cartao">
             <span>Previsto no mês</span>
             <strong>{moeda(previsto)}</strong>
           </div>
@@ -162,6 +193,11 @@ export default async function Painel({
           <div className="cartao">
             <span>Falta pagar</span>
             <strong>{moeda(falta)}</strong>
+          </div>
+          <div className={`cartao ${sobra < 0 ? "cartao-alerta" : "cartao-bom"}`}>
+            <span>{sobra < 0 ? "Estourou o mês" : "Sobra no mês"}</span>
+            <strong>{moeda(sobra)}</strong>
+            <div className="sub">renda menos contas e gastos fora do cartão</div>
           </div>
           <div className="cartao">
             <span>{pct >= 1 ? "Tudo pago" : "Contas em aberto"}</span>
@@ -544,7 +580,8 @@ export default async function Painel({
         </section>
 
         <p className="rodape">
-          O mês seguinte abre sozinho no dia 1. As faturas dos cartões são a
+          A renda vale deste mês em diante até você digitar outra. O mês
+          seguinte abre sozinho no dia 1. As faturas dos cartões são a
           soma do que você lançou em Gastos.
         </p>
       </main>

@@ -5,6 +5,10 @@ dia pelo celular. Uma senha só, a sua.
 
 ## O que ele faz
 
+- **Sabe quanto sobra.** Você digita a renda do mês no primeiro cartão do
+  painel. A sobra é a renda menos as contas previstas e menos os gastos que
+  saíram fora do cartão; o que foi no cartão já está na fatura e não conta duas
+  vezes. Mês que estourou aparece em vermelho.
 - **Abre o mês sozinho.** Toda conta cadastrada aparece no mês novo sem você
   fazer nada. Acontece no dia 1, por uma tarefa agendada, e também na primeira
   vez que você abre a página num mês que ainda não existia.
@@ -69,8 +73,9 @@ npm run dev
 
 Carro R$ 1.326,74 · Vaga R$ 200,00 · Faculdade R$ 356,00 · Imposto R$ 180,00 ·
 Contador R$ 250,00 · Cartão Nubank e Cartão Bradesco Empresa (calculados pelos
-gastos). Valores e dias de vencimento se mudam em Ajustes das contas, dentro da
-própria página.
+gastos). A renda começa em R$ 4.300,00. Valores e dias de vencimento se mudam
+em Ajustes das contas, e a renda no próprio cartão do painel; o valor digitado
+vale daquele mês em diante.
 
 ## Onde está cada coisa
 
@@ -79,7 +84,7 @@ própria página.
 | `app/page.tsx` | o painel inteiro |
 | `app/actions.ts` | marcar pago, lançar gasto, salvar ajustes |
 | `app/api/cron/route.ts` | abre o mês no dia 1 |
-| `lib/data.ts` | as regras: previsto, fatura do cartão, status |
+| `lib/data.ts` | as regras: previsto, fatura do cartão, renda, status |
 | `lib/db.ts` | conexão e criação das tabelas |
 | `lib/auth.ts` | a senha e o cookie |
 | `vercel.json` | o agendamento mensal |

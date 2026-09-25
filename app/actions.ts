@@ -241,6 +241,28 @@ export async function salvarPrevisto(fd: FormData): Promise<void> {
   redirect(destino(fd));
 }
 
+/** Guarda a renda do mes que esta na tela. Como o mes sem valor proprio herda
+ *  o ultimo cadastrado, digitar uma vez ja vale para os meses seguintes. */
+export async function salvarRenda(fd: FormData): Promise<void> {
+  await exigirLogin();
+  await ensureSchema();
+
+  const ano = parseInteiro(fd.get("ano"));
+  const mes = parseInteiro(fd.get("mes"));
+  if (ano == null || mes == null) return;
+
+  const valor = parseValor(fd.get("renda"));
+
+  await db()`
+    insert into renda (ano, mes, valor)
+    values (${ano}, ${mes}, ${valor})
+    on conflict (ano, mes) do update set valor = excluded.valor
+  `;
+
+  revalidatePath("/");
+  redirect(destino(fd));
+}
+
 /** Corrige o valor de um gasto ja lancado. */
 export async function salvarGasto(fd: FormData): Promise<void> {
   await exigirLogin();
