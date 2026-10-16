@@ -48,8 +48,15 @@ export function parseValor(bruto: FormDataEntryValue | null): number {
   if (bruto == null) return 0;
   let texto = String(bruto).trim().replace(/\s/g, "").replace(/R\$/gi, "");
   if (texto === "") return 0;
-  if (texto.includes(",")) {
-    texto = texto.replace(/\./g, "").replace(",", ".");
+  if (texto.includes(",") && texto.includes(".")) {
+    // Os dois separadores: o ultimo e o decimal. "1.326,74" ou "1,326.74"
+    // (iPhone com regiao em ingles, como o atalho do Apple Pay pode mandar).
+    texto =
+      texto.lastIndexOf(",") > texto.lastIndexOf(".")
+        ? texto.replace(/\./g, "").replace(",", ".")
+        : texto.replace(/,/g, "");
+  } else if (texto.includes(",")) {
+    texto = texto.replace(",", ".");
   }
   const n = Number(texto);
   return Number.isFinite(n) ? n : 0;
