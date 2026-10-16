@@ -1,5 +1,13 @@
 import type { Metadata, Viewport } from "next";
+import { Space_Grotesk } from "next/font/google";
 import "./globals.css";
+
+// Fonte geometrica, de cara tecnologica, boa para numeros.
+const fonte = Space_Grotesk({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--fonte",
+});
 
 export const metadata: Metadata = {
   title: "Minhas contas",
@@ -9,7 +17,8 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#1f3a5f",
+  themeColor: "#05070f",
+  colorScheme: "dark",
 };
 
 export default function RootLayout({
@@ -18,7 +27,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="pt-BR">
+    <html lang="pt-BR" className={fonte.variable}>
       <body>{children}</body>
     </html>
   );
