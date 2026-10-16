@@ -13,6 +13,7 @@ import {
 } from "@/lib/data";
 import {
   hoje,
+  hojePorExtenso,
   moeda,
   rotuloMes,
   deslocaMes,
@@ -163,6 +164,10 @@ export default async function Painel({
 
         {sp.erro && ERROS[sp.erro] ? (
           <div className="erro">{ERROS[sp.erro]}</div>
+        ) : null}
+
+        {ehMesAtual ? (
+          <p className="hoje">Hoje é {hojePorExtenso()}</p>
         ) : null}
 
         {!ehMesAtual ? (

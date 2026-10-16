@@ -79,3 +79,13 @@ export function dataBR(iso: string | null): string {
   const [ano, mes, dia] = iso.slice(0, 10).split("-");
   return `${dia}/${mes}/${ano}`;
 }
+
+/** "quinta-feira, 16 de outubro", no fuso de Sao Paulo. */
+export function hojePorExtenso(): string {
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: FUSO,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  }).format(new Date());
+}

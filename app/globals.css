@@ -857,3 +857,14 @@ details[open] summary {
     order: 2;
   }
 }
+
+/* linha com o dia de hoje, logo abaixo do topo */
+.hoje {
+  margin: 0 2px 12px;
+  font-size: 14px;
+  color: var(--cinza);
+}
+
+.hoje::first-letter {
+  text-transform: uppercase;
+}
