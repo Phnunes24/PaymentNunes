@@ -51,13 +51,28 @@ async function criar(): Promise<void> {
   await sql`
     create table if not exists contas (
       id serial primary key,
-      nome text not null unique,
+      nome text not null,
       valor numeric(12, 2) not null default 0,
       dia_vencimento int,
       tipo text not null default 'fixa',
       ativo boolean not null default true,
       ordem int not null default 0
     )
+  `;
+
+  // Nome unico so entre as contas ativas: uma conta apagada continua no
+  // historico dos meses pagos sem impedir que outra nasca com o mesmo nome.
+  // Bancos antigos tem a restricao de nome unico em tudo; ela sai uma vez.
+  const [{ tem: temUnicoAntigo }] = (await sql`
+    select count(*)::int as tem from pg_constraint where conname = 'contas_nome_key'
+  `) as Array<{ tem: number }>;
+
+  if (temUnicoAntigo > 0) {
+    await sql`alter table contas drop constraint contas_nome_key`;
+  }
+  await sql`
+    create unique index if not exists contas_nome_ativa_idx
+        on contas (nome) where ativo
   `;
 
   await sql`
@@ -154,7 +169,7 @@ async function criar(): Promise<void> {
       await sql`
         insert into contas (nome, valor, tipo, secao, ordem)
         values (${nome}, ${valor}, ${tipo}, ${secao}, ${i})
-        on conflict (nome) do nothing
+        on conflict do nothing
       `;
     }
   }

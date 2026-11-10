@@ -5,6 +5,12 @@ import { redirect } from "next/navigation";
 import { db, ensureSchema } from "@/lib/db";
 import { entrar, sair, estaLogado } from "@/lib/auth";
 import { parseValor, parseInteiro, hoje } from "@/lib/format";
+import {
+  apagarConta,
+  criarConta,
+  editarConta,
+  type DadosConta,
+} from "@/lib/data";
 
 async function exigirLogin(): Promise<void> {
   if (!(await estaLogado())) redirect("/login");
@@ -113,92 +119,56 @@ export async function excluirGasto(fd: FormData): Promise<void> {
   redirect(destino(fd));
 }
 
-/** Muda o valor e o vencimento de uma conta. O novo valor vale deste mes em
- *  diante, e so nas contas que ainda nao foram marcadas como pagas. */
+/** Le os campos de uma conta do formulario de criar ou de editar. */
+function lerConta(fd: FormData): DadosConta {
+  const tipo = String(fd.get("tipo") ?? "fixa") === "cartao" ? "cartao" : "fixa";
+  const diaBruto = String(fd.get("dia_vencimento") ?? "").trim();
+  const dia = diaBruto === "" ? null : parseInteiro(diaBruto);
+  return {
+    nome: String(fd.get("nome") ?? "").trim().slice(0, 60),
+    secao: String(fd.get("secao") ?? "").trim().slice(0, 40) || "Geral",
+    tipo,
+    valor: tipo === "cartao" ? 0 : parseValor(fd.get("valor")),
+    dia_vencimento: dia != null && dia >= 1 && dia <= 31 ? dia : null,
+  };
+}
+
+/** Muda nome, secao, tipo, valor e vencimento de uma conta. */
 export async function salvarConta(fd: FormData): Promise<void> {
   await exigirLogin();
-  await ensureSchema();
 
   const id = parseInteiro(fd.get("id"));
   if (id == null) return;
 
-  const valor = parseValor(fd.get("valor"));
-  const diaBruto = String(fd.get("dia_vencimento") ?? "").trim();
-  const dia = diaBruto === "" ? null : parseInteiro(diaBruto);
-  const diaValido = dia != null && dia >= 1 && dia <= 31 ? dia : null;
-  const secao = String(fd.get("secao") ?? "").trim() || "Geral";
-
-  const sql = db();
-  await sql`
-    update contas
-       set valor = ${valor}, dia_vencimento = ${diaValido}, secao = ${secao}
-     where id = ${id}
-  `;
-
-  const { ano, mes } = hoje();
-  await sql`
-    update contas_mes m
-       set previsto = ${valor}
-      from contas c
-     where c.id = m.conta_id
-       and m.conta_id = ${id}
-       and c.tipo = 'fixa'
-       and m.pago = false
-       and (m.ano > ${ano} or (m.ano = ${ano} and m.mes >= ${mes}))
-  `;
+  if (!(await editarConta(id, lerConta(fd)))) {
+    redirect(destino(fd, "erro=conta_existe"));
+  }
 
   revalidatePath("/");
   redirect(destino(fd));
 }
 
-/** Cria uma conta nova. Ela aparece no mes que voce estiver vendo e nos
- *  proximos, porque cada mes se monta com as contas ativas do momento. */
 export async function novaConta(fd: FormData): Promise<void> {
   await exigirLogin();
-  await ensureSchema();
 
-  const nome = String(fd.get("nome") ?? "").trim();
-  if (nome === "") redirect(destino(fd, "erro=conta"));
+  const dados = lerConta(fd);
+  if (dados.nome === "") redirect(destino(fd, "erro=conta"));
 
-  const secao = String(fd.get("secao") ?? "").trim() || "Geral";
-  const tipo = String(fd.get("tipo") ?? "fixa") === "cartao" ? "cartao" : "fixa";
-  const valor = tipo === "cartao" ? 0 : parseValor(fd.get("valor"));
-  const diaBruto = String(fd.get("dia_vencimento") ?? "").trim();
-  const dia = diaBruto === "" ? null : parseInteiro(diaBruto);
-  const diaValido = dia != null && dia >= 1 && dia <= 31 ? dia : null;
-
-  const sql = db();
-  const [{ proxima }] = (await sql`
-    select coalesce(max(ordem), 0) + 1 as proxima from contas
-  `) as Array<{ proxima: number }>;
-
-  const criada = (await sql`
-    insert into contas (nome, valor, dia_vencimento, tipo, secao, ordem)
-    values (${nome}, ${valor}, ${diaValido}, ${tipo}, ${secao}, ${proxima})
-    on conflict (nome) do update set ativo = true
-    returning id
-  `) as Array<{ id: number }>;
-
-  if (criada.length === 0) redirect(destino(fd, "erro=conta_existe"));
+  if (!(await criarConta(dados))) {
+    redirect(destino(fd, "erro=conta_existe"));
+  }
 
   revalidatePath("/");
   redirect(destino(fd));
 }
 
-/** Tira a conta de circulacao sem apagar o historico ja pago. */
-export async function removerConta(fd: FormData): Promise<void> {
+export async function apagarContaAction(fd: FormData): Promise<void> {
   await exigirLogin();
-  await ensureSchema();
 
   const id = parseInteiro(fd.get("id"));
   if (id == null) return;
 
-  const sql = db();
-  await sql`update contas set ativo = false where id = ${id}`;
-  await sql`
-    delete from contas_mes
-     where conta_id = ${id} and pago = false
-  `;
+  await apagarConta(id);
 
   revalidatePath("/");
   redirect(destino(fd));

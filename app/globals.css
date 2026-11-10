@@ -564,55 +564,102 @@ section > h2 {
   color: var(--ciano);
 }
 
-/* ---------------------------------------------------------- ajustes ----- */
-.ajuste {
-  background: var(--vidro);
-  border: 1px solid var(--borda);
-  border-radius: var(--raio);
-  padding: 12px 13px;
-  margin-bottom: 9px;
+/* ----------------------------------------------- editar conta ------- */
+.editar {
+  margin-top: 10px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--borda-forte);
 }
 
-.ajuste-cab {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 10px;
+.editar > summary {
+  font-size: 13.5px;
+  color: var(--cinza);
+  min-height: 40px;
 }
 
-.ajuste-cab strong {
+.editar > summary::before {
+  width: 22px;
+  height: 22px;
   font-size: 15px;
-  font-weight: 600;
 }
 
-.ajuste-grade {
+.editar[open] > summary {
+  color: var(--texto);
+  margin-bottom: 8px;
+}
+
+.editar-grade {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
   align-items: end;
 }
 
-.ajuste-grade .campo {
+.editar-grade .campo {
   flex: none;
   min-width: 0;
 }
 
-.ajuste-grade > .btn-leve {
-  align-self: end;
+.editar-largo {
+  grid-column: 1 / -1;
 }
 
-.ajuste-rem {
-  margin-top: 8px;
-  text-align: right;
+.editar-nota {
+  margin: 8px 2px 4px;
 }
 
-.ajuste-rem .btn-x {
-  width: auto;
-  font-size: 14px;
-  font-weight: 600;
+.apagar {
+  margin-top: 6px;
+}
+
+/* Seletores com .editar na frente para vencer "details[open] summary", que
+   tambem pega este summary quando o Editar de fora esta aberto. */
+.editar .apagar > summary {
+  font-size: 13.5px;
   color: var(--rosa);
-  padding: 0 6px;
+  min-height: 40px;
+  margin-bottom: 0;
+}
+
+.editar .apagar > summary::before {
+  content: "×";
+  width: 22px;
+  height: 22px;
+  font-size: 15px;
+  background: var(--rosa-bg);
+  border-color: var(--rosa-borda);
+  color: var(--rosa);
+  box-shadow: none;
+}
+
+.editar .apagar[open] > summary {
+  margin-bottom: 6px;
+}
+
+.editar .apagar[open] > summary::before {
+  box-shadow: 0 0 14px rgba(251, 113, 133, 0.35);
+}
+
+.apagar .sub {
+  margin: 0 2px 10px;
+}
+
+.btn-perigo {
+  width: 100%;
+  min-height: var(--toque);
+  border-radius: var(--raio-p);
+  border: 1px solid var(--rosa-borda);
+  background: var(--rosa-bg);
+  color: var(--rosa);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.btn-perigo:active {
+  background: rgba(251, 113, 133, 0.2);
+  box-shadow: 0 0 18px rgba(251, 113, 133, 0.35);
+  transform: scale(0.98);
 }
 
 /* texto secundario: datas, vencimento, observacoes */
@@ -985,8 +1032,27 @@ details[open] summary {
     align-items: end;
   }
 
-  .ajuste-grade {
-    grid-template-columns: 1fr 1fr 1fr auto;
+  .editar {
+    grid-column: 1 / -1;
+  }
+
+  .editar-grade {
+    grid-template-columns: 2fr 1.4fr 1.2fr 1.2fr 0.8fr;
+  }
+
+  .editar-grade > .editar-largo.campo {
+    grid-column: auto;
+  }
+
+  .editar-grade > .btn {
+    grid-column: 1 / -1;
+    justify-self: end;
+    width: auto;
+  }
+
+  .btn-perigo {
+    width: auto;
+    padding: 0 18px;
   }
 
   .gasto {

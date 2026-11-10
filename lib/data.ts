@@ -53,6 +53,15 @@ export const CATEGORIAS = [
 
 export const FORMAS_EXTRA = ["Pix", "Débito", "Dinheiro", "Boleto"];
 
+/** O que da para mudar numa conta. */
+export type DadosConta = {
+  nome: string;
+  secao: string;
+  tipo: "fixa" | "cartao";
+  valor: number;
+  dia_vencimento: number | null;
+};
+
 function num(v: unknown): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
@@ -111,6 +120,97 @@ export async function listarContas(): Promise<Conta[]> {
   }));
 }
 
+/** Ja existe outra conta ativa com esse nome? Maiuscula nao conta. */
+async function nomeEmUso(nome: string, exceto: number): Promise<boolean> {
+  const sql = db();
+  const achou = (await sql`
+    select 1 from contas
+     where ativo and lower(nome) = lower(${nome}) and id <> ${exceto}
+     limit 1
+  `) as unknown[];
+  return achou.length > 0;
+}
+
+/** Cria uma conta nova. Ela aparece no mes que voce estiver vendo e nos
+ *  proximos, porque cada mes se monta com as contas ativas do momento.
+ *  Devolve false quando ja existe uma conta ativa com esse nome. */
+export async function criarConta(d: DadosConta): Promise<boolean> {
+  await ensureSchema();
+  if (await nomeEmUso(d.nome, 0)) return false;
+  const sql = db();
+  await sql`
+    insert into contas (nome, valor, dia_vencimento, tipo, secao, ordem)
+    select ${d.nome}, ${d.tipo === "cartao" ? 0 : d.valor}, ${d.dia_vencimento},
+           ${d.tipo}, ${d.secao}, coalesce(max(ordem), 0) + 1
+      from contas
+  `;
+  return true;
+}
+
+/** Muda tudo de uma conta: nome, secao, tipo, valor e vencimento. O valor
+ *  novo vale deste mes em diante, nos meses ainda nao pagos em que voce nao
+ *  digitou um valor so daquele mes. Devolve false quando o nome novo ja e de
+ *  outra conta ativa. */
+export async function editarConta(id: number, d: DadosConta): Promise<boolean> {
+  await ensureSchema();
+  const sql = db();
+
+  const [antes] = (await sql`
+    select nome, tipo from contas where id = ${id} and ativo
+  `) as Array<{ nome: string; tipo: string }>;
+  if (!antes) return true;
+
+  const nome = d.nome || antes.nome;
+  if (nome !== antes.nome && (await nomeEmUso(nome, id))) return false;
+  const valor = d.tipo === "cartao" ? 0 : d.valor;
+
+  await sql`
+    update contas
+       set nome = ${nome}, secao = ${d.secao}, tipo = ${d.tipo},
+           valor = ${valor}, dia_vencimento = ${d.dia_vencimento}
+     where id = ${id}
+  `;
+
+  // A fatura do cartao e achada pelo nome gravado em cada gasto. Renomeou o
+  // cartao, os gastos vao junto, inclusive os dos meses passados.
+  if (antes.tipo === "cartao" && nome !== antes.nome) {
+    await sql`update gastos set pago_com = ${nome} where pago_com = ${antes.nome}`;
+  }
+
+  // Trocou de tipo, o valor digitado a mao num mes deixa de fazer sentido:
+  // volta tudo para o automatico.
+  const mudouTipo = d.tipo !== antes.tipo;
+  const { ano, mes } = hoje();
+  await sql`
+    update contas_mes
+       set previsto = ${valor}, previsto_manual = false
+     where conta_id = ${id}
+       and pago = false
+       and ano * 12 + mes >= ${ano * 12 + mes}
+       and (${mudouTipo}::boolean or previsto_manual = false)
+  `;
+  return true;
+}
+
+/** Apaga a conta deste mes em diante. Os meses anteriores em que ela foi
+ *  paga continuam no historico; se nao sobrar nenhum, ela some de vez. */
+export async function apagarConta(id: number): Promise<void> {
+  await ensureSchema();
+  const sql = db();
+  const { ano, mes } = hoje();
+  await sql`update contas set ativo = false where id = ${id}`;
+  await sql`
+    delete from contas_mes
+     where conta_id = ${id}
+       and (pago = false or ano * 12 + mes >= ${ano * 12 + mes})
+  `;
+  await sql`
+    delete from contas c
+     where c.id = ${id}
+       and not exists (select 1 from contas_mes m where m.conta_id = c.id)
+  `;
+}
+
 /** Soma dos gastos do mes agrupada por forma de pagamento. E o que forma a
  *  fatura de cada cartao, sem ninguem digitar o total. */
 export async function faturasDoMes(
@@ -141,7 +241,8 @@ export async function contasDoMes(ano: number, mes: number): Promise<LinhaMes[]>
              m.previsto, m.previsto_manual, m.pago, m.valor_pago, m.data_pgto
         from contas_mes m
         join contas c on c.id = m.conta_id
-       where m.ano = ${ano} and m.mes = ${mes} and c.ativo
+       where m.ano = ${ano} and m.mes = ${mes}
+         and (c.ativo or m.pago)
        order by c.secao, c.ordem, c.id
     ` as Promise<Array<Record<string, unknown>>>,
     faturasDoMes(ano, mes),

@@ -30,7 +30,7 @@ import {
   salvarGasto,
   salvarRenda,
   novaConta,
-  removerConta,
+  apagarContaAction,
   sairAction,
 } from "./actions";
 import MesDoDispositivo from "./mes-do-dispositivo";
@@ -104,9 +104,14 @@ export default async function Painel({
   const secoes = porSecao(linhas);
   const cartoes = contas.filter((c) => c.tipo === "cartao");
   const formas = [...cartoes.map((c) => c.nome), ...FORMAS_EXTRA];
+  const contaPorId = new Map(contas.map((c) => [c.id, c]));
   // Gasto no cartao ja esta dentro do previsto, virou fatura. So o que saiu
-  // por fora entra de novo na conta da sobra, senao contaria duas vezes.
-  const nomesCartoes = new Set(cartoes.map((c) => c.nome));
+  // por fora entra de novo na conta da sobra, senao contaria duas vezes. Um
+  // cartao ja apagado que aparece no mes, porque foi pago, tambem conta.
+  const nomesCartoes = new Set([
+    ...cartoes.map((c) => c.nome),
+    ...linhas.filter((l) => l.tipo === "cartao").map((l) => l.nome),
+  ]);
   const gastosAvulsos = gastos
     .filter((g) => !nomesCartoes.has(g.pago_com))
     .reduce((s, g) => s + g.valor, 0);
@@ -231,6 +236,11 @@ export default async function Painel({
 
         <section>
           <h2>Contas do mês</h2>
+          <datalist id="secoes">
+            {nomesSecoes.map((s) => (
+              <option key={s} value={s} />
+            ))}
+          </datalist>
 
           {secoes.map(([secao, itens]) => {
             const somaSecao = itens.reduce((s, l) => s + l.previsto, 0);
@@ -334,6 +344,106 @@ export default async function Painel({
                         Pago {moeda(l.pagoEfetivo)} em {dataBR(l.data_pgto)}
                       </div>
                     ) : null}
+
+                    {(() => {
+                      const c = contaPorId.get(l.conta_id);
+                      if (!c) {
+                        return (
+                          <div className="sub conta-pago">
+                            Conta apagada. Aparece aqui só porque foi paga
+                            neste mês.
+                          </div>
+                        );
+                      }
+                      return (
+                        <details className="editar">
+                          <summary>Editar conta</summary>
+                          <form action={salvarConta} className="editar-grade">
+                            <input type="hidden" name="ano" value={ano} />
+                            <input type="hidden" name="mes" value={mes} />
+                            <input type="hidden" name="id" value={c.id} />
+                            <div className="campo editar-largo">
+                              <label htmlFor={`nome-${c.id}`}>Nome</label>
+                              <input
+                                id={`nome-${c.id}`}
+                                name="nome"
+                                defaultValue={c.nome}
+                                maxLength={60}
+                                required
+                              />
+                            </div>
+                            <div className="campo">
+                              <label htmlFor={`sec-${c.id}`}>Seção</label>
+                              <input
+                                id={`sec-${c.id}`}
+                                name="secao"
+                                defaultValue={c.secao}
+                                list="secoes"
+                                maxLength={40}
+                              />
+                            </div>
+                            <div className="campo">
+                              <label htmlFor={`tipo-${c.id}`}>Tipo</label>
+                              <select
+                                id={`tipo-${c.id}`}
+                                name="tipo"
+                                defaultValue={c.tipo}
+                              >
+                                <option value="fixa">Valor fixo</option>
+                                <option value="cartao">Cartão</option>
+                              </select>
+                            </div>
+                            <div className="campo">
+                              <label htmlFor={`val-${c.id}`}>Valor mensal</label>
+                              <input
+                                id={`val-${c.id}`}
+                                name="valor"
+                                inputMode="decimal"
+                                defaultValue={
+                                  c.tipo === "cartao" ? "" : campo(c.valor)
+                                }
+                                placeholder={
+                                  c.tipo === "cartao" ? "soma dos gastos" : "0,00"
+                                }
+                              />
+                            </div>
+                            <div className="campo">
+                              <label htmlFor={`dia-${c.id}`}>Dia venc.</label>
+                              <input
+                                id={`dia-${c.id}`}
+                                name="dia_vencimento"
+                                inputMode="numeric"
+                                defaultValue={c.dia_vencimento ?? ""}
+                                placeholder="dia"
+                              />
+                            </div>
+                            <button className="btn editar-largo" type="submit">
+                              Salvar alterações
+                            </button>
+                          </form>
+                          <p className="sub editar-nota">
+                            O valor novo vale deste mês em diante, nos meses
+                            ainda não pagos. Mês em que você digitou um
+                            previsto só dele continua como está.
+                          </p>
+                          <details className="apagar">
+                            <summary>Apagar conta</summary>
+                            <p className="sub">
+                              Ela some deste mês em diante. Os meses anteriores
+                              em que você pagou continuam no histórico.
+                            </p>
+                            <form action={apagarContaAction}>
+                              <input type="hidden" name="ano" value={ano} />
+                              <input type="hidden" name="mes" value={mes} />
+                              <input type="hidden" name="id" value={c.id} />
+                              <button className="btn-perigo" type="submit">
+                                Apagar {c.nome}
+                              </button>
+                            </form>
+                          </details>
+                        </details>
+                      );
+                    })()}
                   </article>
                 ))}
               </div>
@@ -347,7 +457,8 @@ export default async function Painel({
           <p className="vazio">
             Todo valor é editável: digite por cima e toque no ✓. Campo vazio
             volta ao automático, o do cadastro nas contas fixas e a soma dos
-            gastos nos cartões.
+            gastos nos cartões. Nome, seção, tipo e vencimento ficam em Editar
+            conta, no próprio card, junto com o botão de apagar.
           </p>
 
           <details className="criar">
@@ -362,11 +473,6 @@ export default async function Painel({
                 list="secoes"
                 aria-label="Seção"
               />
-              <datalist id="secoes">
-                {nomesSecoes.map((s) => (
-                  <option key={s} value={s} />
-                ))}
-              </datalist>
               <select name="tipo" defaultValue="fixa" aria-label="Tipo">
                 <option value="fixa">Valor fixo</option>
                 <option value="cartao">Cartão (soma dos gastos)</option>
@@ -500,73 +606,6 @@ export default async function Painel({
             </div>
           </section>
         ) : null}
-
-        <section>
-          <details>
-            <summary>Ajustes das contas</summary>
-            {contas.map((c) => (
-              <div className="ajuste" key={c.id}>
-                <div className="ajuste-cab">
-                  <strong>{c.nome}</strong>
-                  <span className="sub">
-                    {c.tipo === "cartao" ? "cartão" : "valor fixo"}
-                  </span>
-                </div>
-                <form action={salvarConta} className="ajuste-grade">
-                  <input type="hidden" name="ano" value={ano} />
-                  <input type="hidden" name="mes" value={mes} />
-                  <input type="hidden" name="id" value={c.id} />
-                  <div className="campo">
-                    <label htmlFor={`sec-${c.id}`}>Seção</label>
-                    <input
-                      id={`sec-${c.id}`}
-                      name="secao"
-                      defaultValue={c.secao}
-                      list="secoes"
-                    />
-                  </div>
-                  <div className="campo">
-                    <label htmlFor={`val-${c.id}`}>Valor</label>
-                    <input
-                      id={`val-${c.id}`}
-                      name="valor"
-                      inputMode="decimal"
-                      defaultValue={c.tipo === "cartao" ? "" : campo(c.valor)}
-                      placeholder={c.tipo === "cartao" ? "vem dos gastos" : "0,00"}
-                      disabled={c.tipo === "cartao"}
-                    />
-                  </div>
-                  <div className="campo">
-                    <label htmlFor={`dia-${c.id}`}>Dia venc.</label>
-                    <input
-                      id={`dia-${c.id}`}
-                      name="dia_vencimento"
-                      inputMode="numeric"
-                      defaultValue={c.dia_vencimento ?? ""}
-                      placeholder="dia"
-                    />
-                  </div>
-                  <button className="btn-leve" type="submit">
-                    Salvar
-                  </button>
-                </form>
-                <form action={removerConta} className="ajuste-rem">
-                  <input type="hidden" name="ano" value={ano} />
-                  <input type="hidden" name="mes" value={mes} />
-                  <input type="hidden" name="id" value={c.id} />
-                  <button className="btn-x" type="submit" aria-label={`Remover ${c.nome}`}>
-                    Remover conta
-                  </button>
-                </form>
-              </div>
-            ))}
-            <p className="vazio">
-              O valor novo vale deste mês em diante, e só nas contas que ainda
-              não foram marcadas como pagas. Remover tira a conta dos próximos
-              meses e mantém o que já foi pago.
-            </p>
-          </details>
-        </section>
 
         <p className="rodape">
           A renda vale deste mês em diante até você digitar outra. O mês
