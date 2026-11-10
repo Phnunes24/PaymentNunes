@@ -70,21 +70,21 @@ const REGRAS: Array<[string, RegExp]> = [
   ],
   [
     "Mercado",
-    /\b(supermerc|mercado|mercadinho|atacad|assai|carrefour|hortifruti|sacolao|pao de acucar|zaffari|angeloni|condor|savegnago)/,
+    /\b(supermerc|mercado|mercadinho|minimerc|atacad|assai|carrefour|hortifruti|sacolao|pao de acucar|zaffari|angeloni|condor|savegnago)/,
   ],
   [
     "Alimentação",
-    /\b(restaurante|lanch|burger|hamburg|pizza|ifood|padaria|panific|cafe|cafeteria|bar|acai|mcdonald|mc donald|subway|sushi|churrasc|sorvet|doceria|confeitaria|cervej)/,
+    /\b(restaurante|lanch|burger|hamburg|pizza|ifood|ifd\*|padaria|panific|cafe|cafeteria|coffee|bombon|bar\b|acai|mcdonald|mc donald|subway|sushi|churrasc|sorvet|doceria|confeitaria|cervej)|lanche|pizzar|burger|restaur/,
   ],
   [
     "Transporte",
-    /\b(uber|99 ?pop|99app|cabify|estacionament|pedagio|sem parar|veloe|metro|onibus|bilhete unico)/,
+    /\b(uber|99 ?pop|99app|cabify|estacionament|park\b|autopass|locacao de auto|pedagio|sem parar|veloe|metro|onibus|bilhete unico)/,
   ],
   [
     "Assinaturas",
     /\b(netflix|spotify|disney|prime video|amazon prime|apple\.com|youtube|deezer|hbo)/,
   ],
-  ["Lazer", /\b(cinema|cinemark|ingresso|teatro|parque|boliche)/],
+  ["Lazer", /\b(cinema|cinemark|ingresso|teatro|parque|boliche|zig\*)/],
   [
     "Casa",
     /\b(leroy|telhanorte|material de constru|casas bahia|magazine luiza|tok ?stok|etna|madeira ?madeira)/,

@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
     bancos: bancos
       ? {
           novos: bancos.novos,
-          contasPagas: bancos.contasPagas,
+          guardados: bancos.guardados,
           vinculados: bancos.vinculados,
           ignorados: bancos.ignorados,
           erro: bancos.erro,

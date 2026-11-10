@@ -648,7 +648,8 @@ export default async function Painel({
                         <strong>{bancos.resumo.novos}</strong> gastos novos
                       </span>
                       <span>
-                        <strong>{bancos.resumo.contasPagas}</strong> contas pagas
+                        <strong>{bancos.resumo.guardados ?? 0}</strong> Pix e
+                        boletos guardados
                       </span>
                       <span>
                         <strong>{bancos.resumo.vinculados}</strong> já lançados
@@ -693,7 +694,10 @@ export default async function Painel({
                 <p className="vazio">
                   Sincroniza sozinho todo dia de manhã. Os bancos mandam as
                   novidades uma vez por dia, então a compra de hoje aparece
-                  amanhã; a do Apple Pay continua entrando na hora.
+                  amanhã; a do Apple Pay continua entrando na hora. Compras no
+                  cartão e no débito entram sozinhas. Pix, transferências e
+                  boletos ficam guardados na lista abaixo, sem entrar na conta,
+                  porque podem ser o pagamento de uma conta do mês.
                 </p>
 
                 {bancos.contas.length > 0 ? (

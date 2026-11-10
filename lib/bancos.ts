@@ -5,7 +5,7 @@
  */
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "crypto";
 import { db, ensureSchema } from "./db";
-import { abrirMes, listarContas } from "./data";
+import { listarContas } from "./data";
 import { hoje } from "./format";
 import { casarCartao } from "./regras";
 import {
@@ -15,17 +15,17 @@ import {
   buscarContas,
   buscarItem,
   buscarTransacoes,
-  casarContaAberta,
   chaveDe,
+  comprasEstornadas,
   dataBrasil,
   decidir,
+  donosDe,
   limparDescricao,
   movimentosInternos,
   nomeDaConta,
   OPERACOES_TRANSFERENCIA,
   rotuloDoCartao,
   textoDoCartao,
-  type ContaAberta,
   type Decisao,
   type GastoSolto,
   type Lida,
@@ -48,7 +48,8 @@ export type ResumoBancos = {
   quando: string;
   novos: number;
   vinculados: number;
-  contasPagas: number;
+  /** Pix, transferencias e boletos guardados para voce dizer o que sao. */
+  guardados: number;
   ignorados: number;
   bancos: Array<{
     nome: string;
@@ -250,11 +251,6 @@ function menosDias(iso: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-const idx = (data: string) => {
-  const [a, m] = data.split("-").map(Number);
-  return a * 12 + m;
-};
-
 /**
  * Puxa as transacoes de todos os bancos conectados e lanca o que for novo.
  * Nunca lanca a mesma transacao duas vezes, nem a que voce apagou da lista:
@@ -265,7 +261,7 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
     quando: new Date().toISOString(),
     novos: 0,
     vinculados: 0,
-    contasPagas: 0,
+    guardados: 0,
     ignorados: 0,
     bancos: [],
     erro: null,
@@ -294,12 +290,14 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
 
     const lidas: Lida[] = [];
     const vistas: ContaDoBanco[] = [];
+    const donos = new Set<string>();
     await Promise.all(
       itens.map(async (itemId) => {
         try {
           const item = await buscarItem(apiKey, itemId);
           const contas = await buscarContas(apiKey, itemId);
           const banco = bancoDe(contas, item.connector?.name);
+          for (const dono of donosDe(contas)) donos.add(dono);
           resumo.bancos.push({
             nome: banco,
             status: item.status,
@@ -357,6 +355,18 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
       .map((x) => x.nome);
     await reetiquetar(vistas, mapa, nomesCartoes);
 
+    // Estorno que chegou depois da compra: a compra ja lancada sai da lista.
+    const estornadas = comprasEstornadas(lidas);
+    for (const [compra, estorno] of estornadas) {
+      if (jaVistas.has(compra) && !jaVistas.has(estorno)) {
+        await sql`delete from gastos where externo = ${compra}`;
+        await sql`
+          update importados set acao = 'ignorado: compra estornada'
+           where chave = ${compra}
+        `;
+      }
+    }
+
     const unicas = new Map<string, Lida>();
     for (const l of lidas) if (!jaVistas.has(l.chave)) unicas.set(l.chave, l);
     const novas = [...unicas.values()].sort((a, b) =>
@@ -367,10 +377,17 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
     const planos: Plano[] = [];
     for (const l of novas) {
       const data = dataBrasil(l.tx.date);
+      // Nada de antes do ponto de partida. A API filtra pela data em UTC, e
+      // a compra das 23h do ultimo dia do mes passaria.
+      if (data < desde) continue;
+      // Parcela de cartao que ainda vai vencer entra quando o dia dela chegar.
+      if (l.conta.type === "CREDIT" && data > hojeIso) continue;
       const escolha = mapa[l.conta.id];
       let d: Decisao;
       if (escolha === NAO_IMPORTAR) {
         d = { acao: "ignorar", motivo: "conta marcada para não importar" };
+      } else if (estornadas.has(l.chave)) {
+        d = { acao: "ignorar", motivo: "compra estornada" };
       } else if (internos.has(l.chave)) {
         d = { acao: "ignorar", motivo: "entre suas contas ou pagamento de fatura" };
       } else if (
@@ -389,7 +406,8 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
           nomesCartoes,
           hojeIso,
           escolha && nomesCartoes.includes(escolha) ? escolha : null,
-          l.banco
+          l.banco,
+          [...donos]
         );
       }
       // Saida agendada volta a ser olhada quando acontecer.
@@ -401,28 +419,9 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
       (p): p is { l: Lida; d: Extract<Decisao, { acao: "gasto" }> } => p.d.acao === "gasto"
     );
 
-    let abertas: ContaAberta[] = [];
     let soltos: GastoSolto[] = [];
     if (gastos.length > 0) {
       const datas = gastos.map((g) => g.d.data).sort();
-      const min = idx(datas[0]);
-      const max = idx(datas[datas.length - 1]);
-      for (let i = min; i <= max; i++) {
-        await abrirMes(Math.floor((i - 1) / 12), ((i - 1) % 12) + 1);
-      }
-      abertas = ((await sql`
-        select m.id, m.ano, m.mes, m.previsto, c.nome
-          from contas_mes m
-          join contas c on c.id = m.conta_id
-         where not m.pago and c.ativo and c.tipo = 'fixa'
-           and m.ano * 12 + m.mes between ${min} and ${max}
-      `) as Array<Record<string, unknown>>).map((r) => ({
-        id: Number(r.id),
-        ano: Number(r.ano),
-        mes: Number(r.mes),
-        previsto: Number(r.previsto),
-        nome: String(r.nome),
-      }));
       soltos = ((await sql`
         select id, data, valor, pago_com from gastos
          where externo is null
@@ -459,20 +458,10 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
         continue;
       }
 
-      // Boleto ou debito do valor de uma conta fixa em aberto: a conta e paga.
-      if (!d.cartao) {
-        const conta = casarContaAberta(d.valor, d.data, abertas);
-        if (conta) {
-          abertas = abertas.filter((a) => a.id !== conta.id);
-          await sql`
-            update contas_mes
-               set pago = true, valor_pago = ${d.valor}, data_pgto = ${d.data}
-             where id = ${conta.id} and not pago
-          `;
-          resumo.contasPagas++;
-          registrar(l, `conta paga: ${conta.nome}`, d.descricao, d.valor, d.data);
-          continue;
-        }
+      if (d.acao === "guardar") {
+        resumo.guardados++;
+        registrar(l, `guardado: ${d.forma}`, d.descricao, d.valor, d.data);
+        continue;
       }
 
       // Ja lancado a mao ou pelo Apple Pay: so liga um ao outro.

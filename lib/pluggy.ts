@@ -27,6 +27,8 @@ export type PluggyConta = {
   name?: string | null;
   marketingName?: string | null;
   number?: string | null;
+  /** Nome do titular da conta, como o banco informa. */
+  owner?: string | null;
 };
 
 export type PluggyTransacao = {
@@ -122,17 +124,35 @@ export function dataBrasil(iso: string): string {
 
 const MINUSCULAS = new Set(["de", "da", "do", "das", "dos", "e", "em"]);
 
-/** "PADARIA REAL  LTDA" -> "Padaria Real Ltda". Texto que ja tem minuscula
- *  fica como veio. */
+/**
+ * Deixa a descricao do banco com cara de nome de loja:
+ * - "Compra no débito|PADARIA REAL" e "Transferência enviada pelo Pix|FULANO"
+ *   ficam so com o que vem depois da barra;
+ * - "ZIG*AUDIO      SAO PAULO     BRA" (colunas do C6) fica so com a loja;
+ * - tudo em maiuscula vira "Padaria Real". Texto que ja tem minuscula fica
+ *   como veio.
+ */
 export function limparDescricao(bruta: string | null | undefined): string {
-  const s = (bruta ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+  let s = (bruta ?? "").trim();
+  const barra = s.lastIndexOf("|");
+  if (barra >= 0 && s.slice(barra + 1).trim() !== "") s = s.slice(barra + 1).trim();
+
+  // Fatura do C6: loja, cidade e pais em colunas. Sai o pais e, quando a
+  // cidade vem separada da loja por mais de um espaco, sai ela tambem.
+  const semPais = s.replace(/\s+BRA$/, "");
+  const colunas = semPais.split(/\s{2,}/);
+  if (semPais !== s && colunas.length >= 2) colunas.pop();
+  s = colunas.join(" ").replace(/\s+/g, " ").trim().slice(0, 80);
+
   if (s === "") return "Compra";
   if (/[a-zà-ú]/.test(s)) return s;
   return s
     .toLowerCase()
     .split(" ")
     .map((p, i) =>
-      i > 0 && MINUSCULAS.has(p) ? p : p.charAt(0).toUpperCase() + p.slice(1)
+      i > 0 && MINUSCULAS.has(p)
+        ? p
+        : p.replace(/(^|\*)([a-zà-ú])/g, (_, antes, letra) => antes + letra.toUpperCase())
     )
     .join(" ");
 }
@@ -261,9 +281,9 @@ const CATEGORIAS_PLUGGY: Array<[RegExp, string]> = [
   [/groceries|supermarket/i, "Mercado"],
   [/eating out|restaurant|food|delivery/i, "Alimentação"],
   [/gas station|fuel/i, "Combustível"],
-  [/taxi|ride|transport|parking|toll|public transport/i, "Transporte"],
+  [/taxi|ride|transport|parking|toll|public transport|automotive/i, "Transporte"],
   [/pharmacy|health|hospital|dentist/i, "Saúde"],
-  [/streaming|digital service|subscription/i, "Assinaturas"],
+  [/streaming|digital service|subscription|mobile|telecom/i, "Assinaturas"],
   [/leisure|entertainment|culture|tickets/i, "Lazer"],
   [/housing|rent|utilities|electricity|water|internet|home/i, "Casa"],
 ];
@@ -279,6 +299,15 @@ function categoriaDe(descricao: string, categoriaPluggy?: string | null): string
 
 export type Decisao =
   | { acao: "ignorar"; motivo: string }
+  | {
+      /** Saida que pode ser compra, pagamento de uma conta do mes ou
+       *  emprestimo: fica guardada, sem entrar na conta, ate voce dizer. */
+      acao: "guardar";
+      data: string;
+      descricao: string;
+      valor: number;
+      forma: string;
+    }
   | {
       acao: "gasto";
       data: string;
@@ -304,7 +333,8 @@ export function decidir(
   nomesCartoes: string[],
   hojeIso: string,
   cartaoEscolhido?: string | null,
-  banco?: string | null
+  banco?: string | null,
+  donos?: string[]
 ): Decisao {
   const data = dataBrasil(tx.date);
   const descricao = limparDescricao(tx.description);
@@ -357,16 +387,86 @@ export function decidir(
     return { acao: "ignorar", motivo: "pagamento de fatura" };
   }
   if (INVESTIMENTO.test(texto)) return { acao: "ignorar", motivo: "investimento" };
+  if (
+    /same person/i.test(tx.category ?? "") ||
+    (donos ?? []).some((dono) => texto.includes(dono))
+  ) {
+    return { acao: "ignorar", motivo: "transferência para você mesmo" };
+  }
 
-  return {
-    acao: "gasto",
-    data,
-    descricao,
-    valor,
-    pagoCom: formaDaConta(op),
-    categoria: op === "SAQUE" ? "Outros" : categoriaDe(descricao, tx.category),
-    cartao: false,
-  };
+  // Compra no debito, tarifa e saque sao gasto na certa.
+  if (op && OPERACOES_GASTO.has(op)) {
+    return {
+      acao: "gasto",
+      data,
+      descricao,
+      valor,
+      pagoCom: formaDaConta(op),
+      categoria: op === "CARTAO" ? categoriaDe(descricao, tx.category) : "Outros",
+      cartao: false,
+    };
+  }
+
+  // Pix, transferencia e boleto tanto podem ser uma compra quanto o pagamento
+  // de uma conta do mes (faculdade, contador). Lancar como gasto contaria em
+  // dobro quando a conta tambem e marcada como paga, entao ficam guardados.
+  return { acao: "guardar", data, descricao, valor, forma: formaDaConta(op) };
+}
+
+const OPERACOES_GASTO = new Set([
+  "CARTAO",
+  "SAQUE",
+  "PACOTE_TARIFA_SERVICOS",
+  "TARIFA_SERVICOS_AVULSOS",
+  "ENCARGOS_JUROS_CHEQUE_ESPECIAL",
+]);
+
+/** Como o titular aparece no extrato: as tres primeiras palavras do nome,
+ *  sem acento. Serve para reconhecer transferencia para a propria pessoa. */
+export function donosDe(contas: PluggyConta[]): string[] {
+  const donos = new Set<string>();
+  for (const c of contas) {
+    const palavras = normaliza(c.owner ?? "").split(/\s+/).filter(Boolean);
+    if (palavras.length >= 2) donos.add(palavras.slice(0, 3).join(" "));
+  }
+  return [...donos];
+}
+
+const ESTORNO = /estorno|reembolso|devolucao|cancelamento|chargeback/;
+
+/**
+ * Compras de cartao desfeitas por um estorno: mesmo cartao, mesmo valor, ate
+ * 10 dias de distancia. Havendo mais de uma compra igual, vale a que o
+ * estorno cita pelo nome, depois a mais proxima. Devolve compra -> estorno.
+ */
+export function comprasEstornadas(lidas: Lida[]): Map<string, string> {
+  const pares = new Map<string, string>();
+  for (const e of lidas) {
+    if (e.conta.type !== "CREDIT" || !(e.tx.amount < 0)) continue;
+    const texto = normaliza(e.tx.description ?? "");
+    if (e.tx.operationType !== "ESTORNO" && !ESTORNO.test(texto)) continue;
+    const valor = Math.abs(e.tx.amount);
+    const data = dataBrasil(e.tx.date);
+
+    let melhor: Lida | null = null;
+    let melhorNota = -1;
+    for (const c of lidas) {
+      if (c.conta.id !== e.conta.id || !(c.tx.amount > 0) || pares.has(c.chave)) continue;
+      if (Math.abs(c.tx.amount - valor) > 0.005) continue;
+      const distancia = dias(dataBrasil(c.tx.date), data);
+      if (distancia > 10) continue;
+      const citada = normaliza(c.tx.description ?? "")
+        .split(/[^a-z0-9]+/)
+        .some((t) => t.length >= 3 && texto.includes(t));
+      const nota = (citada ? 100 : 0) + (10 - distancia);
+      if (nota > melhorNota) {
+        melhor = c;
+        melhorNota = nota;
+      }
+    }
+    if (melhor) pares.set(melhor.chave, e.chave);
+  }
+  return pares;
 }
 
 function dias(a: string, b: string): number {
@@ -408,27 +508,6 @@ export function movimentosInternos(lidas: Lida[]): Set<string> {
     }
   }
   return internos;
-}
-
-export type ContaAberta = { id: number; ano: number; mes: number; previsto: number; nome: string };
-
-/** Conta fixa do mes ainda nao paga cujo valor bate com a saida (diferenca de
- *  ate 2% ou R$ 1). E o boleto do carro, da faculdade: em vez de virar gasto,
- *  a conta e marcada como paga. */
-export function casarContaAberta(
-  valor: number,
-  data: string,
-  abertas: ContaAberta[]
-): ContaAberta | null {
-  const [ano, mes] = data.split("-").map(Number);
-  let melhor: ContaAberta | null = null;
-  for (const c of abertas) {
-    if (c.ano !== ano || c.mes !== mes || !(c.previsto > 0)) continue;
-    const dif = Math.abs(c.previsto - valor);
-    if (dif > Math.max(1, c.previsto * 0.02)) continue;
-    if (!melhor || dif < Math.abs(melhor.previsto - valor)) melhor = c;
-  }
-  return melhor;
 }
 
 export type GastoSolto = { id: number; data: string; valor: number; pago_com: string };
