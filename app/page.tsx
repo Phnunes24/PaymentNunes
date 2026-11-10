@@ -31,11 +31,43 @@ import {
   salvarRenda,
   novaConta,
   apagarContaAction,
+  salvarBancosAction,
+  sincronizarAgoraAction,
+  salvarCartoesBancoAction,
+  desconectarBancosAction,
   sairAction,
 } from "./actions";
+import {
+  lerConfigBancos,
+  ultimosImportados,
+  NAO_IMPORTAR,
+  type ConfigBancos,
+  type Importado,
+} from "@/lib/bancos";
 import MesDoDispositivo from "./mes-do-dispositivo";
 
 export const dynamic = "force-dynamic";
+// A sincronizacao com os bancos roda dentro das acoes desta pagina e pode
+// levar alguns segundos.
+export const maxDuration = 60;
+
+const ORIGEM: Record<string, string> = {
+  banco: "banco",
+  "apple-pay": "Apple Pay",
+};
+
+/** "2026-11-10T13:05:00Z" -> "10/11 10:05", no horario de Brasilia. */
+function quandoBR(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
+}
 
 const SELO: Record<LinhaMes["status"], string> = {
   pago: "Pago",
@@ -53,6 +85,7 @@ const ERROS: Record<string, string> = {
   gasto: "Para lançar um gasto preencha a descrição e um valor maior que zero.",
   conta: "Para criar uma conta preencha pelo menos o nome.",
   conta_existe: "Já existe uma conta com esse nome.",
+  bancos: "Para conectar os bancos cole o Client ID e pelo menos um ID de item.",
 };
 
 /** Valor em formato de digitacao: 1326.74 -> "1326,74". */
@@ -81,14 +114,18 @@ export default async function Painel({
   let gastos: Awaited<ReturnType<typeof gastosDoMes>> = [];
   let contas: Awaited<ReturnType<typeof listarContas>> = [];
   let renda = 0;
+  let bancos: ConfigBancos | null = null;
+  let importados: Importado[] = [];
   let falhaBanco: string | null = null;
 
   try {
-    [linhas, gastos, contas, renda] = await Promise.all([
+    [linhas, gastos, contas, renda, bancos, importados] = await Promise.all([
       contasDoMes(ano, mes),
       gastosDoMes(ano, mes),
       listarContas(),
       rendaDoMes(ano, mes),
+      lerConfigBancos(),
+      ultimosImportados(15),
     ]);
   } catch (e) {
     falhaBanco = e instanceof Error ? e.message : String(e);
@@ -567,6 +604,9 @@ export default async function Painel({
               </form>
               <span className="sub gasto-meta">
                 <span className="pill-cat">{g.categoria}</span>
+                {ORIGEM[g.origem] ? (
+                  <span className="pill-origem">{ORIGEM[g.origem]}</span>
+                ) : null}
                 {dataBR(g.data)} · {g.pago_com}
               </span>
               <form action={excluirGasto} className="gasto-del">
@@ -593,6 +633,197 @@ export default async function Painel({
           )}
         </section>
 
+        {bancos ? (
+          <section>
+            <h2>Bancos</h2>
+            {bancos.configurado ? (
+              <>
+                {bancos.resumo ? (
+                  <div className="banco-resumo">
+                    <span className="sub">
+                      Última sincronização {quandoBR(bancos.resumo.quando)}
+                    </span>
+                    <div className="banco-numeros">
+                      <span>
+                        <strong>{bancos.resumo.novos}</strong> gastos novos
+                      </span>
+                      <span>
+                        <strong>{bancos.resumo.contasPagas}</strong> contas pagas
+                      </span>
+                      <span>
+                        <strong>{bancos.resumo.vinculados}</strong> já lançados
+                      </span>
+                      <span>
+                        <strong>{bancos.resumo.ignorados}</strong> ignorados
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="vazio">Ainda não sincronizou.</p>
+                )}
+
+                {bancos.resumo?.erro ? (
+                  <div className="erro">{bancos.resumo.erro}</div>
+                ) : null}
+
+                {bancos.resumo && bancos.resumo.bancos.length > 0 ? (
+                  <div className="banco-lista">
+                    {bancos.resumo.bancos.map((b, i) => (
+                      <div className="banco-item" key={`${b.nome}-${i}`}>
+                        <strong>{b.nome}</strong>
+                        <span className="sub">
+                          {b.erro
+                            ? b.erro
+                            : b.expira
+                              ? `autorizado até ${dataBR(b.expira.slice(0, 10))}`
+                              : b.status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+
+                <form action={sincronizarAgoraAction} className="banco-sync">
+                  <input type="hidden" name="ano" value={ano} />
+                  <input type="hidden" name="mes" value={mes} />
+                  <button className="btn" type="submit">
+                    Sincronizar agora
+                  </button>
+                </form>
+                <p className="vazio">
+                  Sincroniza sozinho todo dia de manhã. Os bancos mandam as
+                  novidades uma vez por dia, então a compra de hoje aparece
+                  amanhã; a do Apple Pay continua entrando na hora.
+                </p>
+
+                {bancos.contas.length > 0 ? (
+                  <details className="criar">
+                    <summary>Cartões e contas do banco</summary>
+                    <form action={salvarCartoesBancoAction} className="mapa-form">
+                      <input type="hidden" name="ano" value={ano} />
+                      <input type="hidden" name="mes" value={mes} />
+                      {bancos.contas.map((c) => (
+                        <div className="campo" key={c.id}>
+                          <label htmlFor={`mapa-${c.id}`}>
+                            {c.banco} · {c.nome}
+                          </label>
+                          <select
+                            id={`mapa-${c.id}`}
+                            name={`mapa_${c.id}`}
+                            defaultValue={bancos!.mapa[c.id] ?? ""}
+                          >
+                            <option value="">
+                              {c.cartao ? "Escolher sozinho" : "Importar"}
+                            </option>
+                            {c.cartao
+                              ? cartoes.map((k) => (
+                                  <option key={k.id} value={k.nome}>
+                                    Lançar em {k.nome}
+                                  </option>
+                                ))
+                              : null}
+                            <option value={NAO_IMPORTAR}>Não importar</option>
+                          </select>
+                        </div>
+                      ))}
+                      <button className="btn-leve" type="submit">
+                        Salvar
+                      </button>
+                    </form>
+                    <p className="vazio">
+                      Diga em qual cartão daqui cai cada cartão do banco. Vale
+                      para as próximas compras.
+                    </p>
+                  </details>
+                ) : null}
+
+                {importados.length > 0 ? (
+                  <details className="criar">
+                    <summary>O que entrou por último</summary>
+                    <div className="cat-lista">
+                      {importados.map((t, i) => (
+                        <div className="importado" key={i}>
+                          <span className="importado-desc">
+                            {t.descricao}
+                            <span className="sub"> · {dataBR(t.data)}</span>
+                          </span>
+                          <span className="num">{moeda(t.valor)}</span>
+                          <span
+                            className={
+                              t.acao.startsWith("ignorado")
+                                ? "sub importado-acao"
+                                : "importado-acao"
+                            }
+                          >
+                            {t.acao}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                ) : null}
+
+                <details className="criar">
+                  <summary>Trocar chaves ou desconectar</summary>
+                  <FormBancos
+                    ano={ano}
+                    mes={mes}
+                    clientId={bancos.clientId}
+                    itens={bancos.itens}
+                    temSecret={bancos.temSecret}
+                  />
+                  <form action={desconectarBancosAction}>
+                    <input type="hidden" name="ano" value={ano} />
+                    <input type="hidden" name="mes" value={mes} />
+                    <button className="btn-perigo" type="submit">
+                      Desconectar bancos
+                    </button>
+                  </form>
+                </details>
+              </>
+            ) : (
+              <>
+                <p className="vazio">
+                  Puxe sozinho os gastos do cartão e da conta pelo Open
+                  Finance, de graça, com o Meu Pluggy (uso pessoal, até 5
+                  bancos).
+                </p>
+                <ol className="passos">
+                  <li>
+                    Crie sua conta em{" "}
+                    <a href="https://meu.pluggy.ai" target="_blank" rel="noreferrer">
+                      meu.pluggy.ai
+                    </a>{" "}
+                    e conecte o Nubank e o Bradesco. Cada banco pede a
+                    autorização no app dele.
+                  </li>
+                  <li>
+                    Entre em{" "}
+                    <a href="https://dashboard.pluggy.ai" target="_blank" rel="noreferrer">
+                      dashboard.pluggy.ai
+                    </a>{" "}
+                    com a mesma conta. Em Applications, abra a sua aplicação,
+                    vá em Demo, toque em Connect Account e escolha{" "}
+                    <strong>MeuPluggy</strong> (não o banco). Repita para cada
+                    banco.
+                  </li>
+                  <li>
+                    Copie o Client ID, gere o Client Secret e copie o ID de
+                    cada item em Connected Items. Cole aqui embaixo.
+                  </li>
+                </ol>
+                <FormBancos
+                  ano={ano}
+                  mes={mes}
+                  clientId={bancos.clientId}
+                  itens={bancos.itens}
+                  temSecret={bancos.temSecret}
+                />
+              </>
+            )}
+          </section>
+        ) : null}
+
         {categorias.length > 0 ? (
           <section>
             <h2>Gastos por categoria</h2>
@@ -614,5 +845,65 @@ export default async function Painel({
         </p>
       </main>
     </>
+  );
+}
+
+/** Formulario das chaves do Meu Pluggy. O secret nunca volta para a tela. */
+function FormBancos({
+  ano,
+  mes,
+  clientId,
+  itens,
+  temSecret,
+}: {
+  ano: number;
+  mes: number;
+  clientId: string;
+  itens: string[];
+  temSecret: boolean;
+}) {
+  return (
+    <form action={salvarBancosAction} className="linha-form">
+      <input type="hidden" name="ano" value={ano} />
+      <input type="hidden" name="mes" value={mes} />
+      <div className="campo">
+        <label htmlFor="client-id">Client ID</label>
+        <input
+          id="client-id"
+          name="client_id"
+          defaultValue={clientId}
+          autoComplete="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          required
+        />
+      </div>
+      <div className="campo">
+        <label htmlFor="client-secret">Client Secret</label>
+        <input
+          id="client-secret"
+          name="client_secret"
+          type="password"
+          autoComplete="off"
+          placeholder={temSecret ? "salvo; deixe vazio para manter" : ""}
+          required={!temSecret}
+        />
+      </div>
+      <div className="campo">
+        <label htmlFor="itens">IDs dos itens (um por linha)</label>
+        <textarea
+          id="itens"
+          name="itens"
+          rows={3}
+          defaultValue={itens.join("\n")}
+          autoCapitalize="off"
+          spellCheck={false}
+          required
+        />
+      </div>
+      <button className="btn" type="submit">
+        Salvar e sincronizar
+      </button>
+    </form>
   );
 }

@@ -36,6 +36,8 @@ export type Gasto = {
   categoria: string;
   pago_com: string;
   valor: number;
+  /** manual, apple-pay ou banco */
+  origem: string;
 };
 
 export const CATEGORIAS = [
@@ -318,7 +320,7 @@ export async function gastosDoMes(ano: number, mes: number): Promise<Gasto[]> {
   await ensureSchema();
   const sql = db();
   const linhas = (await sql`
-    select id, data, descricao, categoria, pago_com, valor
+    select id, data, descricao, categoria, pago_com, valor, origem
       from gastos
      where extract(year from data) = ${ano}
        and extract(month from data) = ${mes}
@@ -331,6 +333,7 @@ export async function gastosDoMes(ano: number, mes: number): Promise<Gasto[]> {
     categoria: String(l.categoria),
     pago_com: String(l.pago_com),
     valor: num(l.valor),
+    origem: String(l.origem ?? "manual"),
   }));
 }
 
