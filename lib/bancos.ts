@@ -7,9 +7,11 @@ import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "crypto"
 import { db, ensureSchema } from "./db";
 import { abrirMes, listarContas } from "./data";
 import { hoje } from "./format";
+import { casarCartao } from "./regras";
 import {
   acharMesmoGasto,
   autenticar,
+  bancoDe,
   buscarContas,
   buscarItem,
   buscarTransacoes,
@@ -21,6 +23,8 @@ import {
   movimentosInternos,
   nomeDaConta,
   OPERACOES_TRANSFERENCIA,
+  rotuloDoCartao,
+  textoDoCartao,
   type ContaAberta,
   type Decisao,
   type GastoSolto,
@@ -29,7 +33,16 @@ import {
 
 export const NAO_IMPORTAR = "__ignorar";
 
-export type ContaDoBanco = { id: string; banco: string; nome: string; cartao: boolean };
+export type ContaDoBanco = {
+  id: string;
+  banco: string;
+  nome: string;
+  cartao: boolean;
+  /** Cartao: com que nome a compra entra quando ele nao casa com nenhum
+   *  cartao cadastrado, e o texto usado para tentar casar. */
+  rotulo?: string;
+  texto?: string;
+};
 
 export type ResumoBancos = {
   quando: string;
@@ -166,9 +179,47 @@ export async function salvarCredenciais(dados: {
   }
 }
 
+/** Guarda em que cartao daqui cai cada cartao do banco, e ja corrige as
+ *  compras que tinham entrado com o nome provisorio. */
 export async function salvarMapa(mapa: Record<string, string>): Promise<void> {
-  await ensureSchema();
+  const c = await lerTudo();
   await gravar("bancos_mapa", JSON.stringify(mapa));
+  const nomesCartoes = (await listarContas())
+    .filter((x) => x.tipo === "cartao")
+    .map((x) => x.nome);
+  await reetiquetar(
+    json<ContaDoBanco[]>(c.get("bancos_contas"), []),
+    mapa,
+    nomesCartoes
+  );
+}
+
+/**
+ * Compra de cartao que nao casou com nenhum cartao cadastrado entra com um
+ * nome provisorio ("C6 Bank final 0722"). Quando o cartao passa a ter dono,
+ * porque voce escolheu ou porque criou um cartao com o nome do banco, as
+ * compras ja importadas com o nome provisorio mudam para ele.
+ */
+async function reetiquetar(
+  contas: ContaDoBanco[],
+  mapa: Record<string, string>,
+  nomesCartoes: string[]
+): Promise<void> {
+  const sql = db();
+  for (const conta of contas) {
+    if (!conta.cartao || !conta.rotulo) continue;
+    const escolha = mapa[conta.id];
+    if (escolha === NAO_IMPORTAR) continue;
+    const dono =
+      escolha && nomesCartoes.includes(escolha)
+        ? escolha
+        : casarCartao(conta.texto ?? `${conta.nome} ${conta.banco}`, nomesCartoes);
+    if (!dono || dono === conta.rotulo) continue;
+    await sql`
+      update gastos set pago_com = ${dono}
+       where origem = 'banco' and pago_com = ${conta.rotulo}
+    `;
+  }
 }
 
 /** Apaga as chaves. O registro do que ja foi importado fica, para nada
@@ -247,7 +298,8 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
       itens.map(async (itemId) => {
         try {
           const item = await buscarItem(apiKey, itemId);
-          const banco = item.connector?.name ?? "Banco";
+          const contas = await buscarContas(apiKey, itemId);
+          const banco = bancoDe(contas, item.connector?.name);
           resumo.bancos.push({
             nome: banco,
             status: item.status,
@@ -255,17 +307,25 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
             atualizado: item.lastUpdatedAt ?? null,
             erro: item.error?.message ?? item.error?.code ?? null,
           });
-          const contas = await buscarContas(apiKey, itemId);
           await Promise.all(
             contas.map(async (conta) => {
+              const cartao = conta.type === "CREDIT";
               vistas.push({
                 id: conta.id,
                 banco,
                 nome: nomeDaConta(conta),
-                cartao: conta.type === "CREDIT",
+                cartao,
+                ...(cartao
+                  ? {
+                      rotulo: rotuloDoCartao(conta, banco),
+                      texto: textoDoCartao(conta, banco),
+                    }
+                  : {}),
               });
               const txs = await buscarTransacoes(apiKey, conta.id, janela);
-              for (const tx of txs) lidas.push({ chave: chaveDe(tx), tx, conta });
+              for (const tx of txs) {
+                lidas.push({ chave: chaveDe(tx), tx, conta, banco });
+              }
             })
           );
         } catch (e) {
@@ -295,6 +355,7 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
     const nomesCartoes = (await listarContas())
       .filter((x) => x.tipo === "cartao")
       .map((x) => x.nome);
+    await reetiquetar(vistas, mapa, nomesCartoes);
 
     const unicas = new Map<string, Lida>();
     for (const l of lidas) if (!jaVistas.has(l.chave)) unicas.set(l.chave, l);
@@ -327,7 +388,8 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
           l.conta,
           nomesCartoes,
           hojeIso,
-          escolha && nomesCartoes.includes(escolha) ? escolha : null
+          escolha && nomesCartoes.includes(escolha) ? escolha : null,
+          l.banco
         );
       }
       // Saida agendada volta a ser olhada quando acontecer.

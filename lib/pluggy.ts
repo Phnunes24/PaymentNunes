@@ -137,11 +137,72 @@ export function limparDescricao(bruta: string | null | undefined): string {
     .join(" ");
 }
 
-/** Nome curto da conta para mostrar na tela: "Mastercard Black final 1234". */
+const MARCAS: Array<[RegExp, string]> = [
+  [/\bnu pagamentos\b|nubank/, "Nubank"],
+  [/\bc6\b/, "C6 Bank"],
+  [/bradesco/, "Bradesco"],
+  [/\bitau\b/, "Itaú"],
+  [/santander/, "Santander"],
+  [/banco do brasil/, "Banco do Brasil"],
+  [/caixa economica/, "Caixa"],
+  [/\binter\b/, "Inter"],
+  [/mercado pago/, "Mercado Pago"],
+  [/picpay/, "PicPay"],
+  [/pagbank|pagseguro/, "PagBank"],
+  [/\bbtg\b/, "BTG"],
+  [/\bxp\b/, "XP"],
+  [/sicoob/, "Sicoob"],
+  [/sicredi/, "Sicredi"],
+];
+
+/**
+ * Nome do banco de uma conexao. Pelo Meu Pluggy o conector se chama sempre
+ * "MeuPluggy", entao o banco de verdade sai dos nomes das contas: a conta do
+ * Nubank vem como "Nu Pagamentos S.A.", a do C6 como "C6 BANK".
+ */
+export function bancoDe(contas: PluggyConta[], conector?: string | null): string {
+  const texto = normaliza(
+    [conector ?? "", ...contas.flatMap((c) => [c.name ?? "", c.marketingName ?? ""])].join(" ")
+  );
+  for (const [padrao, marca] of MARCAS) {
+    if (padrao.test(texto)) return marca;
+  }
+  const corrente = contas.find((c) => c.type === "BANK");
+  return (corrente?.name || conector || "Banco").split(" - ")[0].trim().slice(0, 30);
+}
+
+const SUBTIPOS: Record<string, string> = {
+  CHECKING_ACCOUNT: "Conta corrente",
+  SAVINGS_ACCOUNT: "Poupança",
+};
+
+function finalDe(c: PluggyConta): string {
+  return (c.number ?? "").replace(/\D/g, "").slice(-4);
+}
+
+/** Nome curto da conta para mostrar na tela: "gold final 4947", "Conta
+ *  corrente final 9373". */
 export function nomeDaConta(c: PluggyConta): string {
-  const base = (c.marketingName || c.name || (c.type === "CREDIT" ? "Cartão" : "Conta")).trim();
-  const final = (c.number ?? "").replace(/\D/g, "").slice(-4);
+  const base =
+    c.type === "CREDIT"
+      ? (c.name || c.marketingName || "Cartão").trim()
+      : (SUBTIPOS[c.subtype ?? ""] ?? (c.name || "Conta").trim());
+  const final = finalDe(c);
   return final ? `${base} final ${final}` : base;
+}
+
+/** Com que nome entra a compra de um cartao que nao casou com nenhum cartao
+ *  cadastrado: "C6 Bank final 0722". */
+export function rotuloDoCartao(c: PluggyConta, banco?: string | null): string {
+  if (!banco) return nomeDaConta(c);
+  const final = finalDe(c);
+  return final ? `${banco} final ${final}` : banco;
+}
+
+/** Texto usado para casar o cartao do banco com um cartao cadastrado. Leva o
+ *  nome do banco, porque o cartao em si costuma se chamar so "gold". */
+export function textoDoCartao(c: PluggyConta, banco?: string | null): string {
+  return `${c.name ?? ""} ${c.marketingName ?? ""} ${banco ?? ""}`.trim();
 }
 
 /** Identificador estavel da transacao. O providerId vem do banco e
@@ -235,14 +296,15 @@ export type Decisao =
  * vieram do cartao), investimento e saida agendada que ainda nao aconteceu.
  *
  * `cartaoEscolhido` e o nome da conta de cartao que voce ligou a este cartao
- * do banco; sem escolha, tenta casar pelo nome.
+ * do banco; sem escolha, tenta casar pelo nome do cartao e do banco.
  */
 export function decidir(
   tx: PluggyTransacao,
   conta: PluggyConta,
   nomesCartoes: string[],
   hojeIso: string,
-  cartaoEscolhido?: string | null
+  cartaoEscolhido?: string | null,
+  banco?: string | null
 ): Decisao {
   const data = dataBrasil(tx.date);
   const descricao = limparDescricao(tx.description);
@@ -270,8 +332,8 @@ export function decidir(
     }
     const pagoCom =
       cartaoEscolhido ||
-      casarCartao(`${conta.name ?? ""} ${conta.marketingName ?? ""}`, nomesCartoes) ||
-      nomeDaConta(conta);
+      casarCartao(textoDoCartao(conta, banco), nomesCartoes) ||
+      rotuloDoCartao(conta, banco);
     return {
       acao: "gasto",
       data,
@@ -311,7 +373,13 @@ function dias(a: string, b: string): number {
   return Math.abs(Date.parse(a + "T12:00:00Z") - Date.parse(b + "T12:00:00Z")) / 864e5;
 }
 
-export type Lida = { chave: string; tx: PluggyTransacao; conta: PluggyConta };
+export type Lida = {
+  chave: string;
+  tx: PluggyTransacao;
+  conta: PluggyConta;
+  /** Nome do banco da conexao de onde a transacao veio. */
+  banco?: string;
+};
 
 /**
  * Saidas da conta corrente que sao dinheiro mudando de lugar entre as suas

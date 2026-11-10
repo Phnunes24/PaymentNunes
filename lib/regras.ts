@@ -48,7 +48,10 @@ export function casarCartao(
   for (const nome of nomesCartoes) {
     const tokens = normaliza(nome)
       .split(/[^a-z0-9]+/)
-      .filter((t) => t.length >= 3 && !GENERICAS.has(t));
+      // Pedaco curto so vale com numero no meio, como o "c6" de "Cartao C6".
+      .filter(
+        (t) => (t.length >= 3 || (t.length === 2 && /\d/.test(t))) && !GENERICAS.has(t)
+      );
     const pontos = tokens.filter((t) => alvo.includes(t)).length;
     if (pontos > 0 && (!melhor || pontos > melhor.pontos)) {
       melhor = { nome, pontos };
