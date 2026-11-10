@@ -1,11 +1,14 @@
 import type { NextRequest } from "next/server";
 import { abrirMes } from "@/lib/data";
+import { lerConfigBancos, sincronizarBancos } from "@/lib/bancos";
 import { hoje, deslocaMes } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
-/** Chamado pelo Vercel no dia 1 de cada mes. Deixa o mes corrente e o
- *  seguinte ja montados, para a pagina abrir pronta. */
+/** Chamado pelo Vercel todo dia de manha. Deixa o mes corrente e o seguinte
+ *  ja montados, para a pagina abrir pronta, e puxa as novidades dos bancos
+ *  quando eles estao conectados. */
 export async function GET(req: NextRequest) {
   const segredo = process.env.CRON_SECRET;
   if (segredo && req.headers.get("authorization") !== `Bearer ${segredo}`) {
@@ -18,8 +21,21 @@ export async function GET(req: NextRequest) {
   await abrirMes(ano, mes);
   await abrirMes(seguinte.ano, seguinte.mes);
 
+  const bancos = (await lerConfigBancos()).configurado
+    ? await sincronizarBancos()
+    : null;
+
   return Response.json({
     ok: true,
     abertos: [`${mes}/${ano}`, `${seguinte.mes}/${seguinte.ano}`],
+    bancos: bancos
+      ? {
+          novos: bancos.novos,
+          contasPagas: bancos.contasPagas,
+          vinculados: bancos.vinculados,
+          ignorados: bancos.ignorados,
+          erro: bancos.erro,
+        }
+      : "não conectados",
   });
 }
