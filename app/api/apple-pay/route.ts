@@ -3,7 +3,7 @@ import { timingSafeEqual } from "crypto";
 import { db, ensureSchema } from "@/lib/db";
 import { listarContas } from "@/lib/data";
 import { hoje, moeda, parseValor } from "@/lib/format";
-import { casarCartao, categorizar } from "@/lib/regras";
+import { casarCartao, categorizar } from "@/lib/applepay";
 
 export const dynamic = "force-dynamic";
 
@@ -114,8 +114,8 @@ export async function POST(req: NextRequest) {
     }
 
     const [novo] = (await sql`
-      insert into gastos (data, descricao, categoria, pago_com, valor, origem)
-      values (${data}, ${estabelecimento}, ${categoria}, ${pagoCom}, ${valor}, 'apple-pay')
+      insert into gastos (data, descricao, categoria, pago_com, valor)
+      values (${data}, ${estabelecimento}, ${categoria}, ${pagoCom}, ${valor})
       returning id
     `) as Array<{ id: number }>;
 

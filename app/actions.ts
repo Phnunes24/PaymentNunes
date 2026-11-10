@@ -11,12 +11,6 @@ import {
   editarConta,
   type DadosConta,
 } from "@/lib/data";
-import {
-  desconectarBancos,
-  salvarCredenciais,
-  salvarMapa,
-  sincronizarBancos,
-} from "@/lib/bancos";
 
 async function exigirLogin(): Promise<void> {
   if (!(await estaLogado())) redirect("/login");
@@ -252,58 +246,6 @@ export async function salvarGasto(fd: FormData): Promise<void> {
 
   await db()`update gastos set valor = ${valor} where id = ${id}`;
 
-  revalidatePath("/");
-  redirect(destino(fd));
-}
-
-/** Guarda as chaves do Meu Pluggy e ja faz a primeira sincronizacao. */
-export async function salvarBancosAction(fd: FormData): Promise<void> {
-  await exigirLogin();
-
-  const clientId = String(fd.get("client_id") ?? "").trim();
-  const clientSecret = String(fd.get("client_secret") ?? "").trim();
-  const itens = String(fd.get("itens") ?? "")
-    .split(/[\s,;]+/)
-    .map((s) => s.trim())
-    .filter((s) => /^[0-9a-f-]{20,}$/i.test(s));
-  if (clientId === "" || itens.length === 0) {
-    redirect(destino(fd, "erro=bancos"));
-  }
-
-  await salvarCredenciais({ clientId, clientSecret, itens });
-  await sincronizarBancos();
-
-  revalidatePath("/");
-  redirect(destino(fd));
-}
-
-export async function sincronizarAgoraAction(fd: FormData): Promise<void> {
-  await exigirLogin();
-  await sincronizarBancos();
-  revalidatePath("/");
-  redirect(destino(fd));
-}
-
-/** Liga cada cartao do banco a um cartao cadastrado aqui, ou desliga a
- *  importacao de uma conta do banco. */
-export async function salvarCartoesBancoAction(fd: FormData): Promise<void> {
-  await exigirLogin();
-
-  const mapa: Record<string, string> = {};
-  fd.forEach((valor, campo) => {
-    if (campo.startsWith("mapa_") && typeof valor === "string" && valor !== "") {
-      mapa[campo.slice(5)] = valor;
-    }
-  });
-  await salvarMapa(mapa);
-
-  revalidatePath("/");
-  redirect(destino(fd));
-}
-
-export async function desconectarBancosAction(fd: FormData): Promise<void> {
-  await exigirLogin();
-  await desconectarBancos();
   revalidatePath("/");
   redirect(destino(fd));
 }

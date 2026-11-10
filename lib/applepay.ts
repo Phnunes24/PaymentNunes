@@ -1,7 +1,7 @@
 /**
- * Regras para transformar uma compra que chegou sozinha (atalho do Apple Pay
- * ou importacao dos bancos) em gasto: descobrir qual cartao cadastrado foi
- * usado e chutar a categoria pelo nome do estabelecimento.
+ * Regras para transformar uma compra feita com Apple Pay (enviada pelo
+ * atalho "Transacao" do iPhone) em gasto: descobrir qual cartao cadastrado
+ * foi usado e chutar a categoria pelo nome do estabelecimento.
  *
  * Sem imports de proposito, para poder ser testado direto com o node.
  */

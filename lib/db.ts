@@ -103,44 +103,6 @@ async function criar(): Promise<void> {
 
   await sql`create index if not exists gastos_data_idx on gastos (data)`;
 
-  // De onde o gasto veio (manual, apple-pay, banco) e, quando veio do banco,
-  // o identificador da transacao, que impede lancar a mesma compra duas vezes.
-  const [{ tem: temOrigem }] = (await sql`
-    select count(*)::int as tem
-      from information_schema.columns
-     where table_name = 'gastos' and column_name = 'origem'
-  `) as Array<{ tem: number }>;
-
-  if (temOrigem === 0) {
-    await sql`alter table gastos add column origem text not null default 'manual'`;
-    await sql`alter table gastos add column if not exists externo text`;
-  }
-  await sql`
-    create unique index if not exists gastos_externo_idx
-        on gastos (externo) where externo is not null
-  `;
-
-  // Chaves e estado da importacao dos bancos, e outras configuracoes soltas.
-  await sql`
-    create table if not exists config (
-      chave text primary key,
-      valor text not null
-    )
-  `;
-
-  // Toda transacao de banco ja vista, lancada ou ignorada. E o que impede um
-  // gasto que voce apagou de voltar na proxima sincronizacao.
-  await sql`
-    create table if not exists importados (
-      chave text primary key,
-      acao text not null,
-      descricao text,
-      valor numeric(12, 2),
-      data date,
-      criado_em timestamptz not null default now()
-    )
-  `;
-
   // Quanto entra no mes. Uma linha por mes, e o mes sem linha propria herda a
   // ultima renda cadastrada antes dele.
   await sql`
