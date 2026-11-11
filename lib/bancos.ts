@@ -13,13 +13,18 @@ import {
   autenticar,
   bancoDe,
   buscarContas,
+  buscarFaturas,
+  buscarInvestimentos,
   buscarItem,
   buscarTransacoes,
   chaveDe,
+  cicloDoBanco,
   comprasEstornadas,
   dataBrasil,
   decidir,
   donosDe,
+  faturaAberta,
+  indiceDaData,
   limparDescricao,
   movimentosInternos,
   nomeDaConta,
@@ -29,6 +34,7 @@ import {
   type Decisao,
   type GastoSolto,
   type Lida,
+  type PluggyInvestimento,
 } from "./pluggy";
 
 export const NAO_IMPORTAR = "__ignorar";
@@ -42,6 +48,11 @@ export type ContaDoBanco = {
    *  cartao cadastrado, e o texto usado para tentar casar. */
   rotulo?: string;
   texto?: string;
+  /** Cartao: dia em que a fatura fecha e vence, segundo o banco. */
+  fechamento?: number | null;
+  vencimento?: number | null;
+  /** Conta: saldo disponivel. */
+  saldo?: number;
 };
 
 export type ResumoBancos = {
@@ -201,6 +212,20 @@ export async function salvarMapa(mapa: Record<string, string>): Promise<void> {
  * porque voce escolheu ou porque criou um cartao com o nome do banco, as
  * compras ja importadas com o nome provisorio mudam para ele.
  */
+/** Cartao cadastrado aqui que corresponde a um cartao do banco: o que voce
+ *  escolheu, ou o que casa pelo nome. */
+function donoDoCartao(
+  conta: ContaDoBanco,
+  mapa: Record<string, string>,
+  nomesCartoes: string[]
+): string | null {
+  if (!conta.cartao) return null;
+  const escolha = mapa[conta.id];
+  if (escolha === NAO_IMPORTAR) return null;
+  if (escolha && nomesCartoes.includes(escolha)) return escolha;
+  return casarCartao(conta.texto ?? `${conta.nome} ${conta.banco}`, nomesCartoes);
+}
+
 async function reetiquetar(
   contas: ContaDoBanco[],
   mapa: Record<string, string>,
@@ -208,19 +233,108 @@ async function reetiquetar(
 ): Promise<void> {
   const sql = db();
   for (const conta of contas) {
-    if (!conta.cartao || !conta.rotulo) continue;
-    const escolha = mapa[conta.id];
-    if (escolha === NAO_IMPORTAR) continue;
-    const dono =
-      escolha && nomesCartoes.includes(escolha)
-        ? escolha
-        : casarCartao(conta.texto ?? `${conta.nome} ${conta.banco}`, nomesCartoes);
+    if (!conta.rotulo) continue;
+    const dono = donoDoCartao(conta, mapa, nomesCartoes);
     if (!dono || dono === conta.rotulo) continue;
     await sql`
       update gastos set pago_com = ${dono}
        where origem = 'banco' and pago_com = ${conta.rotulo}
     `;
   }
+}
+
+/** O cartao cadastrado aprende com o banco em que dia a fatura fecha e
+ *  vence. So preenche o que estiver vazio: o que voce digitou fica. */
+async function aprenderCiclos(
+  contas: ContaDoBanco[],
+  mapa: Record<string, string>,
+  nomesCartoes: string[]
+): Promise<void> {
+  const sql = db();
+  for (const conta of contas) {
+    if (conta.fechamento == null && conta.vencimento == null) continue;
+    const dono = donoDoCartao(conta, mapa, nomesCartoes);
+    if (!dono) continue;
+    await sql`
+      update contas
+         set dia_fechamento = coalesce(dia_fechamento, ${conta.fechamento ?? null}::int),
+             dia_vencimento = coalesce(dia_vencimento, ${conta.vencimento ?? null}::int)
+       where ativo and tipo = 'cartao' and nome = ${dono}
+    `;
+  }
+}
+
+/** Troca os investimentos guardados pelos que o banco acabou de informar e
+ *  tira o retrato do dia: total investido e saldo em conta. */
+async function guardarInvestimentos(
+  porItem: Map<string, { banco: string; lista: PluggyInvestimento[] }>,
+  contas: ContaDoBanco[],
+  hojeIso: string
+): Promise<void> {
+  if (porItem.size === 0) return;
+  const sql = db();
+  const data = (valor: string | null | undefined) => {
+    const s = (valor ?? "").slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+  };
+  const numero = (valor: number | null | undefined) =>
+    typeof valor === "number" && Number.isFinite(valor) ? valor : null;
+
+  for (const [item, { banco, lista }] of porItem) {
+    const ids = lista.map((i) => i.id);
+    await sql`
+      delete from investimentos
+       where item = ${item} and not (id = any(${ids}::text[]))
+    `;
+    if (lista.length === 0) continue;
+    await sql`
+      insert into investimentos
+             (id, item, banco, nome, tipo, subtipo, situacao, saldo, bruto,
+              aplicado, lucro, taxa, indexador, taxa_fixa, vencimento, emissor,
+              atualizado)
+      select t.id, ${item}, ${banco}, t.nome, t.tipo, t.subtipo, t.situacao,
+             coalesce(t.saldo, 0), t.bruto, t.aplicado, t.lucro, t.taxa,
+             t.indexador, t.taxa_fixa, t.vencimento::date, t.emissor, now()
+        from unnest(
+               ${ids}::text[],
+               ${lista.map((i) => (i.name ?? "Investimento").slice(0, 120))}::text[],
+               ${lista.map((i) => i.type ?? "OTHER")}::text[],
+               ${lista.map((i) => i.subtype ?? null)}::text[],
+               ${lista.map((i) => i.status ?? null)}::text[],
+               ${lista.map((i) => numero(i.balance))}::numeric[],
+               ${lista.map((i) => numero(i.amount))}::numeric[],
+               ${lista.map((i) => numero(i.amountOriginal))}::numeric[],
+               ${lista.map((i) => numero(i.amountProfit))}::numeric[],
+               ${lista.map((i) => numero(i.rate))}::numeric[],
+               ${lista.map((i) => i.rateType ?? null)}::text[],
+               ${lista.map((i) => numero(i.fixedAnnualRate))}::numeric[],
+               ${lista.map((i) => data(i.dueDate))}::text[],
+               ${lista.map((i) => (i.issuer ?? null))}::text[]
+             ) as t(id, nome, tipo, subtipo, situacao, saldo, bruto, aplicado,
+                    lucro, taxa, indexador, taxa_fixa, vencimento, emissor)
+      on conflict (id) do update
+         set item = excluded.item, banco = excluded.banco, nome = excluded.nome,
+             tipo = excluded.tipo, subtipo = excluded.subtipo,
+             situacao = excluded.situacao, saldo = excluded.saldo,
+             bruto = excluded.bruto, aplicado = excluded.aplicado,
+             lucro = excluded.lucro, taxa = excluded.taxa,
+             indexador = excluded.indexador, taxa_fixa = excluded.taxa_fixa,
+             vencimento = excluded.vencimento, emissor = excluded.emissor,
+             atualizado = excluded.atualizado
+    `;
+  }
+
+  const emConta = contas
+    .filter((c) => !c.cartao)
+    .reduce((soma, c) => soma + (c.saldo ?? 0), 0);
+  await sql`
+    insert into patrimonio (data, investido, em_conta)
+    select ${hojeIso}::date, coalesce(sum(saldo), 0), ${emConta}
+      from investimentos
+     where coalesce(situacao, 'ACTIVE') <> 'TOTAL_WITHDRAWAL'
+    on conflict (data) do update
+       set investido = excluded.investido, em_conta = excluded.em_conta
+  `;
 }
 
 /** Apaga as chaves. O registro do que ja foi importado fica, para nada
@@ -291,6 +405,10 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
     const lidas: Lida[] = [];
     const vistas: ContaDoBanco[] = [];
     const donos = new Set<string>();
+    // Em que mes vence a fatura aberta de cada cartao, e cada fatura fechada.
+    const faturaAbertaDe = new Map<string, number | null>();
+    const vencimentoDaFatura = new Map<string, number>();
+    const investimentos = new Map<string, { banco: string; lista: PluggyInvestimento[] }>();
     await Promise.all(
       itens.map(async (itemId) => {
         try {
@@ -317,15 +435,47 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
                   ? {
                       rotulo: rotuloDoCartao(conta, banco),
                       texto: textoDoCartao(conta, banco),
+                      ...cicloDoBanco(conta),
                     }
-                  : {}),
+                  : typeof conta.balance === "number"
+                    ? { saldo: conta.balance }
+                    : {}),
               });
-              const txs = await buscarTransacoes(apiKey, conta.id, janela);
+              // Cartao olha 45 dias para tras mesmo no primeiro mes: a fatura
+              // aberta comecou antes do dia 1.
+              const txs = await buscarTransacoes(
+                apiKey,
+                conta.id,
+                cartao ? menosDias(hojeIso, 45) : janela
+              );
               for (const tx of txs) {
                 lidas.push({ chave: chaveDe(tx), tx, conta, banco });
               }
+              if (cartao) {
+                faturaAbertaDe.set(conta.id, faturaAberta(conta, hojeIso));
+                if (txs.some((t) => t.creditCardMetadata?.billId)) {
+                  try {
+                    for (const f of await buscarFaturas(apiKey, conta.id)) {
+                      const vence = String(f.dueDate ?? "").slice(0, 10);
+                      if (/^\d{4}-\d{2}-\d{2}$/.test(vence)) {
+                        vencimentoDaFatura.set(f.id, indiceDaData(vence));
+                      }
+                    }
+                  } catch {
+                    // sem a lista de faturas, vale a regra do fechamento
+                  }
+                }
+              }
             })
           );
+          try {
+            investimentos.set(itemId, {
+              banco,
+              lista: await buscarInvestimentos(apiKey, itemId),
+            });
+          } catch {
+            // banco que nao informa investimentos: fica o que ja estava guardado
+          }
         } catch (e) {
           resumo.bancos.push({
             nome: `Item ${itemId.slice(0, 8)}`,
@@ -354,6 +504,35 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
       .filter((x) => x.tipo === "cartao")
       .map((x) => x.nome);
     await reetiquetar(vistas, mapa, nomesCartoes);
+    await aprenderCiclos(vistas, mapa, nomesCartoes);
+
+    // Em que fatura a compra cai, segundo o banco: a fatura fechada em que
+    // ela esta ou, se ainda nao fechou, a fatura aberta do cartao.
+    const faturaDe = (l: Lida): number | null => {
+      if (l.conta.type !== "CREDIT") return null;
+      const fechada = l.tx.creditCardMetadata?.billId;
+      if (fechada && vencimentoDaFatura.has(fechada)) {
+        return vencimentoDaFatura.get(fechada) ?? null;
+      }
+      return l.tx.status === "PENDING" ? (faturaAbertaDe.get(l.conta.id) ?? null) : null;
+    };
+
+    // Compras ja importadas ganham (ou corrigem) a fatura informada pelo banco.
+    const refazer = { chave: [] as string[], fatura: [] as number[] };
+    for (const l of lidas) {
+      const fatura = jaVistas.has(l.chave) ? faturaDe(l) : null;
+      if (fatura != null) {
+        refazer.chave.push(l.chave);
+        refazer.fatura.push(fatura);
+      }
+    }
+    if (refazer.chave.length > 0) {
+      await sql`
+        update gastos g set fatura = t.fatura
+          from unnest(${refazer.chave}::text[], ${refazer.fatura}::int[]) as t(chave, fatura)
+         where g.externo = t.chave and g.fatura is distinct from t.fatura
+      `;
+    }
 
     // Estorno que chegou depois da compra: a compra ja lancada sai da lista.
     const estornadas = comprasEstornadas(lidas);
@@ -378,8 +557,10 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
     for (const l of novas) {
       const data = dataBrasil(l.tx.date);
       // Nada de antes do ponto de partida. A API filtra pela data em UTC, e
-      // a compra das 23h do ultimo dia do mes passaria.
-      if (data < desde) continue;
+      // a compra das 23h do ultimo dia do mes passaria. A excecao e a compra
+      // que esta na fatura aberta do cartao: sem ela a fatura fica incompleta.
+      const naFaturaAberta = l.conta.type === "CREDIT" && l.tx.status === "PENDING";
+      if (data < desde && !naFaturaAberta) continue;
       // Parcela de cartao que ainda vai vencer entra quando o dia dela chegar.
       if (l.conta.type === "CREDIT" && data > hojeIso) continue;
       const escolha = mapa[l.conta.id];
@@ -436,7 +617,7 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
     }
 
     const reg = { chave: [] as string[], acao: [] as string[], desc: [] as string[], valor: [] as number[], data: [] as string[] };
-    const ins = { data: [] as string[], desc: [] as string[], cat: [] as string[], pago: [] as string[], valor: [] as number[], chave: [] as string[] };
+    const ins = { data: [] as string[], desc: [] as string[], cat: [] as string[], pago: [] as string[], valor: [] as number[], chave: [] as string[], fatura: [] as Array<number | null> };
     const registrar = (l: Lida, acao: string, desc: string, valor: number, data: string) => {
       reg.chave.push(l.chave);
       reg.acao.push(acao);
@@ -468,7 +649,11 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
       const mesmo = acharMesmoGasto(d, soltos);
       if (mesmo) {
         soltos = soltos.filter((s) => s.id !== mesmo.id);
-        await sql`update gastos set externo = ${l.chave} where id = ${mesmo.id} and externo is null`;
+        await sql`
+          update gastos
+             set externo = ${l.chave}, fatura = coalesce(${faturaDe(l)}::int, fatura)
+           where id = ${mesmo.id} and externo is null
+        `;
         resumo.vinculados++;
         registrar(l, "já lançado", d.descricao, d.valor, d.data);
         continue;
@@ -480,17 +665,19 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
       ins.pago.push(d.pagoCom);
       ins.valor.push(d.valor);
       ins.chave.push(l.chave);
+      ins.fatura.push(faturaDe(l));
       resumo.novos++;
       registrar(l, `gasto: ${d.pagoCom}`, d.descricao, d.valor, d.data);
     }
 
     if (ins.chave.length > 0) {
       await sql`
-        insert into gastos (data, descricao, categoria, pago_com, valor, origem, externo)
-        select t.data::date, t.descricao, t.categoria, t.pago_com, t.valor, 'banco', t.chave
+        insert into gastos (data, descricao, categoria, pago_com, valor, origem, externo, fatura)
+        select t.data::date, t.descricao, t.categoria, t.pago_com, t.valor, 'banco', t.chave, t.fatura
           from unnest(${ins.data}::text[], ${ins.desc}::text[], ${ins.cat}::text[],
-                      ${ins.pago}::text[], ${ins.valor}::numeric[], ${ins.chave}::text[])
-               as t(data, descricao, categoria, pago_com, valor, chave)
+                      ${ins.pago}::text[], ${ins.valor}::numeric[], ${ins.chave}::text[],
+                      ${ins.fatura}::int[])
+               as t(data, descricao, categoria, pago_com, valor, chave, fatura)
         on conflict do nothing
       `;
     }
@@ -502,6 +689,8 @@ export async function sincronizarBancos(): Promise<ResumoBancos> {
         on conflict (chave) do nothing
       `;
     }
+
+    await guardarInvestimentos(investimentos, vistas, hojeIso);
 
     const falhas = resumo.bancos.filter((b) => b.status === "ERRO" || b.erro);
     if (falhas.length > 0 && falhas.length === resumo.bancos.length) {

@@ -75,6 +75,16 @@ async function criar(): Promise<void> {
         on contas (nome) where ativo
   `;
 
+  // Conta com numero certo de parcelas (financiamento, curso): quantas sao no
+  // total e em que mes caiu a primeira, guardado como ano * 12 + mes. Sem
+  // isso a conta se repete todo mes, sem fim.
+  await sql`alter table contas add column if not exists parcelas int`;
+  await sql`alter table contas add column if not exists parcela_inicio int`;
+
+  // Cartao: dia em que a fatura fecha. Com ele, a compra cai na fatura do
+  // mes em que e paga, e nao no mes em que foi feita.
+  await sql`alter table contas add column if not exists dia_fechamento int`;
+
   await sql`
     create table if not exists contas_mes (
       id serial primary key,
@@ -120,11 +130,55 @@ async function criar(): Promise<void> {
         on gastos (externo) where externo is not null
   `;
 
+  // Fatura em que a compra cai (ano * 12 + mes do vencimento), quando o banco
+  // informa. Vazio, vale a regra do fechamento do cartao.
+  await sql`alter table gastos add column if not exists fatura int`;
+
+  // Investimentos lidos do banco na ultima sincronizacao, e um retrato por dia
+  // do total investido e do saldo em conta, para acompanhar a evolucao.
+  await sql`
+    create table if not exists investimentos (
+      id text primary key,
+      item text not null,
+      banco text not null,
+      nome text not null,
+      tipo text not null,
+      subtipo text,
+      situacao text,
+      saldo numeric(14, 2) not null default 0,
+      bruto numeric(14, 2),
+      aplicado numeric(14, 2),
+      lucro numeric(14, 2),
+      taxa numeric(10, 4),
+      indexador text,
+      taxa_fixa numeric(10, 4),
+      vencimento date,
+      emissor text,
+      atualizado timestamptz not null default now()
+    )
+  `;
+  await sql`
+    create table if not exists patrimonio (
+      data date primary key,
+      investido numeric(14, 2) not null default 0,
+      em_conta numeric(14, 2) not null default 0
+    )
+  `;
+
   // Chaves e estado da importacao dos bancos, e outras configuracoes soltas.
   await sql`
     create table if not exists config (
       chave text primary key,
       valor text not null
+    )
+  `;
+
+  // Teto de gasto por categoria no mes. Opcional: categoria sem linha aqui
+  // nao tem limite.
+  await sql`
+    create table if not exists limites (
+      categoria text primary key,
+      valor numeric(12, 2) not null
     )
   `;
 

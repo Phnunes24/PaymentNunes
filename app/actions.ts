@@ -9,7 +9,11 @@ import {
   apagarConta,
   criarConta,
   editarConta,
+  editarGasto,
+  salvarLimites,
+  CATEGORIAS,
   type DadosConta,
+  type DadosGasto,
 } from "@/lib/data";
 import {
   desconectarBancos,
@@ -22,13 +26,37 @@ async function exigirLogin(): Promise<void> {
   if (!(await estaLogado())) redirect("/login");
 }
 
-function destino(fd: FormData, extra?: string): string {
-  const ano = fd.get("ano");
-  const mes = fd.get("mes");
+const TELAS = new Set([
+  "/",
+  "/contas",
+  "/gastos",
+  "/analise",
+  "/investimentos",
+  "/ajustes",
+]);
+
+/** Para onde voltar depois da acao: a mesma tela, no mesmo mes. O mes pode
+ *  ser trocado por quem chama (gasto lancado com data de outro mes). */
+function destino(
+  fd: FormData,
+  extra?: string,
+  noMes?: { ano: number; mes: number }
+): string {
+  const volta = String(fd.get("volta") ?? "/");
+  const caminho = TELAS.has(volta) ? volta : "/";
+  const ano = noMes?.ano ?? parseInteiro(fd.get("ano"));
+  const mes = noMes?.mes ?? parseInteiro(fd.get("mes"));
   const partes: string[] = [];
-  if (ano && mes) partes.push(`ano=${ano}`, `mes=${mes}`);
+  if (ano != null && mes != null) partes.push(`ano=${ano}`, `mes=${mes}`);
   if (extra) partes.push(extra);
-  return partes.length ? `/?${partes.join("&")}` : "/";
+  return partes.length ? `${caminho}?${partes.join("&")}` : caminho;
+}
+
+/** Mes de uma data aaaa-mm-dd, ou undefined se ela nao estiver nesse formato. */
+function mesDaData(data: string): { ano: number; mes: number } | undefined {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) return undefined;
+  const [ano, mes] = data.split("-").map(Number);
+  return mes >= 1 && mes <= 12 ? { ano, mes } : undefined;
 }
 
 export async function entrarAction(fd: FormData): Promise<void> {
@@ -62,7 +90,7 @@ export async function pagarConta(fd: FormData): Promise<void> {
      where ano = ${ano} and mes = ${mes} and conta_id = ${contaId}
   `;
 
-  revalidatePath("/");
+  revalidatePath("/", "layout");
   redirect(destino(fd));
 }
 
@@ -81,35 +109,40 @@ export async function desfazerPagamento(fd: FormData): Promise<void> {
      where ano = ${ano} and mes = ${mes} and conta_id = ${contaId}
   `;
 
-  revalidatePath("/");
+  revalidatePath("/", "layout");
   redirect(destino(fd));
+}
+
+/** Le os campos de um gasto do formulario de lancar ou de editar. */
+function lerGasto(fd: FormData): DadosGasto {
+  const dataBruta = String(fd.get("data") ?? "").trim();
+  const categoria = String(fd.get("categoria") ?? "");
+  return {
+    descricao: String(fd.get("descricao") ?? "").trim().slice(0, 80),
+    valor: parseValor(fd.get("valor")),
+    data: mesDaData(dataBruta) ? dataBruta : hoje().iso,
+    categoria: CATEGORIAS.includes(categoria) ? categoria : "Outros",
+    pago_com: String(fd.get("pago_com") ?? "").trim().slice(0, 60) || "Pix",
+  };
 }
 
 export async function novoGasto(fd: FormData): Promise<void> {
   await exigirLogin();
   await ensureSchema();
 
-  const descricao = String(fd.get("descricao") ?? "").trim();
-  const valor = parseValor(fd.get("valor"));
-  const data = String(fd.get("data") ?? "").trim() || hoje().iso;
-  const categoria = String(fd.get("categoria") ?? "Outros");
-  const pagoCom = String(fd.get("pago_com") ?? "Pix");
-
-  if (descricao === "" || valor <= 0) redirect(destino(fd, "erro=gasto"));
+  const g = lerGasto(fd);
+  if (g.descricao === "" || g.valor <= 0) redirect(destino(fd, "erro=gasto"));
 
   await db()`
     insert into gastos (data, descricao, categoria, pago_com, valor)
-    values (${data}, ${descricao}, ${categoria}, ${pagoCom}, ${valor})
+    values (${g.data}, ${g.descricao}, ${g.categoria}, ${g.pago_com}, ${g.valor})
   `;
 
-  revalidatePath("/");
+  revalidatePath("/", "layout");
 
   // O gasto pertence ao mes da data dele. Se esse nao for o mes na tela, e
   // para la que voltamos: senao o lancamento some e parece que nao funcionou.
-  const [a, m] = data.split("-").map(Number);
-  redirect(
-    Number.isFinite(a) && Number.isFinite(m) ? `/?ano=${a}&mes=${m}` : destino(fd)
-  );
+  redirect(destino(fd, undefined, mesDaData(g.data)));
 }
 
 export async function excluirGasto(fd: FormData): Promise<void> {
@@ -121,7 +154,7 @@ export async function excluirGasto(fd: FormData): Promise<void> {
 
   await db()`delete from gastos where id = ${id}`;
 
-  revalidatePath("/");
+  revalidatePath("/", "layout");
   redirect(destino(fd));
 }
 
@@ -130,12 +163,31 @@ function lerConta(fd: FormData): DadosConta {
   const tipo = String(fd.get("tipo") ?? "fixa") === "cartao" ? "cartao" : "fixa";
   const diaBruto = String(fd.get("dia_vencimento") ?? "").trim();
   const dia = diaBruto === "" ? null : parseInteiro(diaBruto);
+
+  // Parcelas: o formulario diz o total e qual e a parcela do mes que esta na
+  // tela. Daqui sai o mes da primeira, que e o que fica guardado.
+  const total = parseInteiro(fd.get("parcelas"));
+  const atual = parseInteiro(fd.get("parcela_atual"), 1) ?? 1;
+  const agora = hoje();
+  const anoTela = parseInteiro(fd.get("ano"), agora.ano) ?? agora.ano;
+  const mesTela = parseInteiro(fd.get("mes"), agora.mes) ?? agora.mes;
+  const parcelada =
+    tipo === "fixa" &&
+    total != null &&
+    total >= 1 &&
+    total <= 600 &&
+    atual >= 1 &&
+    atual <= total;
+
   return {
     nome: String(fd.get("nome") ?? "").trim().slice(0, 60),
     secao: String(fd.get("secao") ?? "").trim().slice(0, 40) || "Geral",
     tipo,
     valor: tipo === "cartao" ? 0 : parseValor(fd.get("valor")),
     dia_vencimento: dia != null && dia >= 1 && dia <= 31 ? dia : null,
+    dia_fechamento: parseInteiro(fd.get("dia_fechamento")),
+    parcelas: parcelada ? total : null,
+    parcela_inicio: parcelada ? anoTela * 12 + mesTela - (atual - 1) : null,
   };
 }
 
@@ -150,7 +202,7 @@ export async function salvarConta(fd: FormData): Promise<void> {
     redirect(destino(fd, "erro=conta_existe"));
   }
 
-  revalidatePath("/");
+  revalidatePath("/", "layout");
   redirect(destino(fd));
 }
 
@@ -164,7 +216,7 @@ export async function novaConta(fd: FormData): Promise<void> {
     redirect(destino(fd, "erro=conta_existe"));
   }
 
-  revalidatePath("/");
+  revalidatePath("/", "layout");
   redirect(destino(fd));
 }
 
@@ -176,7 +228,7 @@ export async function apagarContaAction(fd: FormData): Promise<void> {
 
   await apagarConta(id);
 
-  revalidatePath("/");
+  revalidatePath("/", "layout");
   redirect(destino(fd));
 }
 
@@ -213,7 +265,7 @@ export async function salvarPrevisto(fd: FormData): Promise<void> {
     `;
   }
 
-  revalidatePath("/");
+  revalidatePath("/", "layout");
   redirect(destino(fd));
 }
 
@@ -235,24 +287,39 @@ export async function salvarRenda(fd: FormData): Promise<void> {
     on conflict (ano, mes) do update set valor = excluded.valor
   `;
 
-  revalidatePath("/");
+  revalidatePath("/", "layout");
   redirect(destino(fd));
 }
 
-/** Corrige o valor de um gasto ja lancado. */
+/** Corrige um gasto ja lancado: descricao, valor, data, categoria e forma. */
 export async function salvarGasto(fd: FormData): Promise<void> {
   await exigirLogin();
-  await ensureSchema();
 
   const id = parseInteiro(fd.get("id"));
   if (id == null) return;
 
-  const valor = parseValor(fd.get("valor"));
-  if (valor <= 0) redirect(destino(fd, "erro=gasto"));
+  const g = lerGasto(fd);
+  if (g.descricao === "" || g.valor <= 0) redirect(destino(fd, "erro=gasto"));
 
-  await db()`update gastos set valor = ${valor} where id = ${id}`;
+  await editarGasto(id, g);
 
-  revalidatePath("/");
+  revalidatePath("/", "layout");
+  // Mudou a data para outro mes: a tela vai junto, senao o gasto some.
+  redirect(destino(fd, undefined, mesDaData(g.data)));
+}
+
+/** Guarda o limite de gasto de cada categoria. Campo vazio tira o limite. */
+export async function salvarLimitesAction(fd: FormData): Promise<void> {
+  await exigirLogin();
+
+  const limites = new Map<string, number>();
+  for (const categoria of CATEGORIAS) {
+    const bruto = fd.get(`limite_${categoria}`);
+    if (bruto != null) limites.set(categoria, parseValor(bruto));
+  }
+  await salvarLimites(limites);
+
+  revalidatePath("/", "layout");
   redirect(destino(fd));
 }
 
@@ -273,14 +340,14 @@ export async function salvarBancosAction(fd: FormData): Promise<void> {
   await salvarCredenciais({ clientId, clientSecret, itens });
   await sincronizarBancos();
 
-  revalidatePath("/");
+  revalidatePath("/", "layout");
   redirect(destino(fd));
 }
 
 export async function sincronizarAgoraAction(fd: FormData): Promise<void> {
   await exigirLogin();
   await sincronizarBancos();
-  revalidatePath("/");
+  revalidatePath("/", "layout");
   redirect(destino(fd));
 }
 
@@ -297,13 +364,13 @@ export async function salvarCartoesBancoAction(fd: FormData): Promise<void> {
   });
   await salvarMapa(mapa);
 
-  revalidatePath("/");
+  revalidatePath("/", "layout");
   redirect(destino(fd));
 }
 
 export async function desconectarBancosAction(fd: FormData): Promise<void> {
   await exigirLogin();
   await desconectarBancos();
-  revalidatePath("/");
+  revalidatePath("/", "layout");
   redirect(destino(fd));
 }

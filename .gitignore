@@ -10,3 +10,6 @@ npm-debug.log*
 .vercel
 next-env.d.ts
 *.tsbuildinfo
+
+# Postgres embutido do modo local (npm run dev com BANCO_LOCAL=1)
+.pglite/

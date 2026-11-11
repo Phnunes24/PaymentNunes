@@ -4,6 +4,9 @@ import {
   contasDoMes,
   gastosDoMes,
   listarContas,
+  ciclosDosCartoes,
+  faturaDoGasto,
+  type Ciclo,
   porCategoria,
   porSecao,
   rendaDoMes,
@@ -14,6 +17,7 @@ import {
 import {
   hoje,
   hojePorExtenso,
+  nomeMes,
   moeda,
   rotuloMes,
   deslocaMes,
@@ -44,6 +48,7 @@ import {
   type ConfigBancos,
   type Importado,
 } from "@/lib/bancos";
+import { mesDoIndice } from "@/lib/resumo";
 import MesDoDispositivo from "./mes-do-dispositivo";
 
 export const dynamic = "force-dynamic";
@@ -116,16 +121,18 @@ export default async function Painel({
   let renda = 0;
   let bancos: ConfigBancos | null = null;
   let importados: Importado[] = [];
+  let ciclos = new Map<string, Ciclo>();
   let falhaBanco: string | null = null;
 
   try {
-    [linhas, gastos, contas, renda, bancos, importados] = await Promise.all([
+    [linhas, gastos, contas, renda, bancos, importados, ciclos] = await Promise.all([
       contasDoMes(ano, mes),
       gastosDoMes(ano, mes),
       listarContas(),
       rendaDoMes(ano, mes),
       lerConfigBancos(),
       ultimosImportados(15),
+      ciclosDosCartoes(),
     ]);
   } catch (e) {
     falhaBanco = e instanceof Error ? e.message : String(e);
@@ -166,6 +173,9 @@ export default async function Painel({
       <header className="topo">
         <div className="topo-interno">
           <h1>Minhas contas</h1>
+          <a className="sair" href="/investimentos">
+            Investimentos
+          </a>
           <form action={sairAction}>
             <button className="sair" type="submit">
               Sair
@@ -296,7 +306,7 @@ export default async function Painel({
                           <span className="sub">
                             {l.previstoManual
                               ? "valor digitado"
-                              : "soma dos gastos do mês"}
+                              : "soma das compras desta fatura"}
                           </span>
                         ) : l.vencimento ? (
                           <span className="sub">
@@ -454,6 +464,18 @@ export default async function Painel({
                                 placeholder="dia"
                               />
                             </div>
+                            {c.tipo === "cartao" ? (
+                              <div className="campo">
+                                <label htmlFor={`fecha-${c.id}`}>Fecha dia</label>
+                                <input
+                                  id={`fecha-${c.id}`}
+                                  name="dia_fechamento"
+                                  inputMode="numeric"
+                                  defaultValue={c.dia_fechamento ?? ""}
+                                  placeholder="dia"
+                                />
+                              </div>
+                            ) : null}
                             <button className="btn editar-largo" type="submit">
                               Salvar alterações
                             </button>
@@ -493,8 +515,8 @@ export default async function Painel({
 
           <p className="vazio">
             Todo valor é editável: digite por cima e toque no ✓. Campo vazio
-            volta ao automático, o do cadastro nas contas fixas e a soma dos
-            gastos nos cartões. Nome, seção, tipo e vencimento ficam em Editar
+            volta ao automático, o do cadastro nas contas fixas e a soma das
+            compras da fatura nos cartões. Nome, seção, tipo e vencimento ficam em Editar
             conta, no próprio card, junto com o botão de apagar.
           </p>
 
@@ -588,6 +610,10 @@ export default async function Painel({
                 <input type="hidden" name="ano" value={ano} />
                 <input type="hidden" name="mes" value={mes} />
                 <input type="hidden" name="id" value={g.id} />
+                <input type="hidden" name="descricao" value={g.descricao} />
+                <input type="hidden" name="data" value={g.data} />
+                <input type="hidden" name="categoria" value={g.categoria} />
+                <input type="hidden" name="pago_com" value={g.pago_com} />
                 <input
                   name="valor"
                   inputMode="decimal"
@@ -608,6 +634,12 @@ export default async function Painel({
                   <span className="pill-origem">{ORIGEM[g.origem]}</span>
                 ) : null}
                 {dataBR(g.data)} · {g.pago_com}
+                {(() => {
+                  // Compra no cartao que cai na fatura de outro mes.
+                  const indice = faturaDoGasto(g, ciclos);
+                  if (indice == null || indice === ano * 12 + mes) return null;
+                  return ` · fatura de ${nomeMes(mesDoIndice(indice).mes)}`;
+                })()}
               </span>
               <form action={excluirGasto} className="gasto-del">
                 <input type="hidden" name="ano" value={ano} />
@@ -851,8 +883,10 @@ export default async function Painel({
 
         <p className="rodape">
           A renda vale deste mês em diante até você digitar outra. O mês
-          seguinte abre sozinho no dia 1. As faturas dos cartões são a soma do
-          que você lançou em Gastos.
+          seguinte abre sozinho no dia 1. A fatura de cada cartão é a soma das
+          compras que caem nela: com o dia de fechamento cadastrado, a compra
+          vai para a fatura do mês em que você paga, e não do mês em que
+          comprou.
         </p>
       </main>
     </>

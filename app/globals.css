@@ -188,6 +188,14 @@ a {
   min-height: 38px;
 }
 
+a.sair {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  color: var(--ciano);
+  border-color: rgba(34, 211, 238, 0.28);
+}
+
 .sair:active {
   border-color: var(--rosa-borda);
   color: var(--rosa);

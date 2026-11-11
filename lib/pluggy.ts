@@ -29,6 +29,14 @@ export type PluggyConta = {
   number?: string | null;
   /** Nome do titular da conta, como o banco informa. */
   owner?: string | null;
+  /** Conta: saldo disponivel. Cartao: tudo que esta em aberto, incluindo as
+   *  parcelas que ainda vao vencer. */
+  balance?: number | null;
+  /** Cartao: quando a fatura fecha e quando vence. */
+  creditData?: {
+    balanceCloseDate?: string | null;
+    balanceDueDate?: string | null;
+  } | null;
 };
 
 export type PluggyTransacao = {
@@ -43,6 +51,27 @@ export type PluggyTransacao = {
   operationType?: string | null;
   providerId?: string | null;
   category?: string | null;
+  /** Cartao: a fatura fechada em que a compra entrou, quando ja ha uma. */
+  creditCardMetadata?: { billId?: string | null } | null;
+};
+
+export type PluggyInvestimento = {
+  id: string;
+  name?: string | null;
+  type?: string | null;
+  subtype?: string | null;
+  status?: string | null;
+  /** Saldo liquido hoje. */
+  balance?: number | null;
+  /** Valor bruto, antes de imposto. */
+  amount?: number | null;
+  amountOriginal?: number | null;
+  amountProfit?: number | null;
+  rate?: number | null;
+  rateType?: string | null;
+  fixedAnnualRate?: number | null;
+  dueDate?: string | null;
+  issuer?: string | null;
 };
 
 async function chamar<T>(caminho: string, apiKey: string | null, init?: RequestInit): Promise<T> {
@@ -103,7 +132,79 @@ export async function buscarTransacoes(
   return todas;
 }
 
+/** Faturas fechadas de um cartao: so o que interessa aqui, o vencimento. */
+export async function buscarFaturas(
+  apiKey: string,
+  contaId: string
+): Promise<Array<{ id: string; dueDate?: string | null }>> {
+  const r = await chamar<{ results: Array<{ id: string; dueDate?: string | null }> }>(
+    `/bills?accountId=${encodeURIComponent(contaId)}`,
+    apiKey
+  );
+  return r.results ?? [];
+}
+
+/** Investimentos de uma conexao, todas as paginas. */
+export async function buscarInvestimentos(
+  apiKey: string,
+  itemId: string
+): Promise<PluggyInvestimento[]> {
+  const todos: PluggyInvestimento[] = [];
+  for (let pagina = 1; pagina <= 20; pagina++) {
+    const r: { results: PluggyInvestimento[]; totalPages?: number } = await chamar(
+      `/investments?itemId=${encodeURIComponent(itemId)}&page=${pagina}`,
+      apiKey
+    );
+    todos.push(...(r.results ?? []));
+    if (pagina >= (r.totalPages ?? 1)) break;
+  }
+  return todos;
+}
+
 // --------------------------------------------------------------- regras ---
+
+function dataPura(valor: string | null | undefined): string | null {
+  const s = (valor ?? "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
+/** Indice do mes (ano * 12 + mes) de uma data aaaa-mm-dd. */
+export function indiceDaData(data: string): number {
+  const [ano, mes] = data.split("-").map(Number);
+  return ano * 12 + mes;
+}
+
+/**
+ * Mes em que vence a fatura aberta do cartao, pelo que o banco informa, ou
+ * null quando ele nao informa. As datas do banco podem ser as da fatura que
+ * acabou de fechar; nesse caso a aberta e a do mes seguinte.
+ */
+export function faturaAberta(conta: PluggyConta, hojeIso: string): number | null {
+  const vence = dataPura(conta.creditData?.balanceDueDate);
+  if (!vence) return null;
+  // Vencimento de mais de 40 dias atras e dado velho: melhor nao confiar.
+  if (dias(vence, hojeIso) > 40 && vence < hojeIso) return null;
+  const fecha = dataPura(conta.creditData?.balanceCloseDate);
+  const jaFechou = fecha ? fecha < hojeIso : vence < hojeIso;
+  return indiceDaData(vence) + (jaFechou ? 1 : 0);
+}
+
+/** Dia de fechamento e de vencimento que o banco informa. Fechamento no
+ *  ultimo dia do mes vira 31, que aqui quer dizer "ultimo dia". */
+export function cicloDoBanco(conta: PluggyConta): {
+  fechamento: number | null;
+  vencimento: number | null;
+} {
+  const fecha = dataPura(conta.creditData?.balanceCloseDate);
+  const vence = dataPura(conta.creditData?.balanceDueDate);
+  let fechamento: number | null = null;
+  if (fecha) {
+    const [ano, mes, dia] = fecha.split("-").map(Number);
+    const ultimo = new Date(Date.UTC(ano, mes, 0)).getUTCDate();
+    fechamento = dia === ultimo ? 31 : dia;
+  }
+  return { fechamento, vencimento: vence ? Number(vence.slice(8, 10)) : null };
+}
 
 /** Data da transacao no fuso do Brasil. Data "pura" (meia-noite UTC) vale
  *  como esta; horario de verdade e convertido, senao a compra das 22h cairia
